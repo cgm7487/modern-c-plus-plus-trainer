@@ -271,13 +271,13 @@ function CodeEditorWithRef({ initialCode, onCodeChange }) {
   );
 }
 
+const LazyEditor = React.lazy(() => import('@monaco-editor/react'));
+
 /** Minimal Monaco editor (no compile button, used in exercise page) */
 function EditorOnly({ code, onChange }) {
-  const Editor = React.lazy(() => import('@monaco-editor/react'));
-
   return (
     <React.Suspense fallback={<div className="loading-spinner">載入編輯器...</div>}>
-      <Editor
+      <LazyEditor
         height="360px"
         language="cpp"
         theme="vs-dark"
