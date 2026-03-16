@@ -2619,4 +2619,1648 @@ int main() {
       ]
     }
   },
+
+  // ===== MORE DESIGN PATTERNS =====
+  {
+    id: 'strategy-pattern',
+    category: 'design-patterns',
+    title: '策略模式 (Strategy)',
+    description: '使用 std::function 與 Lambda 實現策略模式，在執行期動態切換演算法。',
+    difficulty: 'intermediate',
+    content: `# 策略模式 (Strategy Pattern)
+
+## 概念
+
+將演算法封裝成獨立的策略物件，讓它們可以互相替換。客戶端可以在執行期動態選擇不同的策略。
+
+## 傳統 vs Modern C++ 實現
+
+### 傳統做法：繼承 + 虛擬函式
+
+\`\`\`cpp
+class SortStrategy {
+public:
+    virtual ~SortStrategy() = default;
+    virtual void sort(std::vector<int>& data) = 0;
+};
+
+class BubbleSort : public SortStrategy { ... };
+class QuickSort : public SortStrategy { ... };
+\`\`\`
+
+### Modern C++：std::function + Lambda
+
+不需要定義一堆子類別，直接用 \`std::function\` 作為策略：
+
+\`\`\`cpp
+class Sorter {
+    std::function<void(std::vector<int>&)> strategy_;
+public:
+    void setStrategy(std::function<void(std::vector<int>&)> s) {
+        strategy_ = std::move(s);
+    }
+    void sort(std::vector<int>& data) { strategy_(data); }
+};
+\`\`\`
+
+## 搭配 std::variant 的策略模式
+
+C++17 的 \`std::variant\` + \`std::visit\` 提供了另一種零成本的策略切換：
+
+\`\`\`cpp
+using Strategy = std::variant<BubbleSort, QuickSort, MergeSort>;
+
+void execute(Strategy& s, std::vector<int>& data) {
+    std::visit([&data](auto& algo) { algo.sort(data); }, s);
+}
+\`\`\`
+
+這種方式是 **編譯期多態**，沒有虛擬函式的額外開銷。
+
+## 何時使用？
+
+- 多種演算法需要互換（排序、壓縮、定價策略）
+- 避免大量 if-else / switch 判斷
+- 需要在執行期改變行為
+
+## Best Practice
+
+- 簡單情境用 \`std::function\` + lambda（最靈活）
+- 效能敏感用 \`std::variant\` + \`std::visit\`（零成本）
+- 策略數量固定且已知時優先考慮 variant
+- 策略數量不確定或需要外掛機制時用 std::function
+`,
+    codeExample: `#include <iostream>
+#include <vector>
+#include <functional>
+#include <algorithm>
+#include <string>
+#include <variant>
+#include <cmath>
+
+// ====== 方法一：std::function + Lambda ======
+
+class TextFormatter {
+    std::function<std::string(const std::string&)> strategy_;
+    std::string name_;
+
+public:
+    TextFormatter(std::string name,
+                  std::function<std::string(const std::string&)> strategy)
+        : name_(std::move(name)), strategy_(std::move(strategy)) {}
+
+    void setStrategy(std::function<std::string(const std::string&)> s) {
+        strategy_ = std::move(s);
+    }
+
+    std::string format(const std::string& text) const {
+        return strategy_(text);
+    }
+};
+
+// ====== 方法二：std::variant + std::visit（零成本多態）======
+
+struct DiscountNone {
+    double apply(double price) const { return price; }
+};
+
+struct DiscountPercent {
+    double rate;
+    double apply(double price) const { return price * (1.0 - rate); }
+};
+
+struct DiscountFixed {
+    double amount;
+    double apply(double price) const { return std::max(0.0, price - amount); }
+};
+
+using PricingStrategy = std::variant<DiscountNone, DiscountPercent, DiscountFixed>;
+
+double calculatePrice(double basePrice, const PricingStrategy& strategy) {
+    return std::visit([basePrice](const auto& s) {
+        return s.apply(basePrice);
+    }, strategy);
+}
+
+int main() {
+    // === std::function 策略 ===
+    auto uppercase = [](const std::string& s) {
+        std::string result = s;
+        std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+        return result;
+    };
+
+    auto addBrackets = [](const std::string& s) {
+        return "[" + s + "]";
+    };
+
+    auto snakeCase = [](const std::string& s) {
+        std::string result;
+        for (char c : s) {
+            if (c == ' ') result += '_';
+            else result += static_cast<char>(std::tolower(c));
+        }
+        return result;
+    };
+
+    TextFormatter formatter("demo", uppercase);
+    std::cout << formatter.format("Hello World") << std::endl;
+
+    formatter.setStrategy(addBrackets);
+    std::cout << formatter.format("Hello World") << std::endl;
+
+    formatter.setStrategy(snakeCase);
+    std::cout << formatter.format("Hello World") << std::endl;
+
+    // === std::variant 策略（定價） ===
+    std::cout << "--- Pricing ---" << std::endl;
+    double price = 100.0;
+
+    PricingStrategy none = DiscountNone{};
+    PricingStrategy percent = DiscountPercent{0.2};
+    PricingStrategy fixed = DiscountFixed{15.0};
+
+    std::cout << "Original: " << calculatePrice(price, none) << std::endl;
+    std::cout << "20% off:  " << calculatePrice(price, percent) << std::endl;
+    std::cout << "$15 off:  " << calculatePrice(price, fixed) << std::endl;
+
+    return 0;
+}`,
+    exercise: {
+      title: '策略模式練習',
+      description: '實作一個可切換壓縮策略的系統：\n1. 定義三種「壓縮」策略（用字串模擬）：\n   - NoCompression: 原樣回傳\n   - RLE: 回傳 "RLE(<原字串>)"\n   - ZIP: 回傳 "ZIP(<原字串>)"\n2. 使用 std::function 作為策略\n3. 動態切換策略並輸出結果',
+      starterCode: `#include <iostream>
+#include <functional>
+#include <string>
+
+class Compressor {
+    // TODO: 用 std::function 儲存策略
+public:
+    // TODO: setStrategy 和 compress 方法
+};
+
+int main() {
+    Compressor c;
+    std::string data = "HelloWorld";
+
+    // TODO: 設定不同策略並輸出
+    // NoCompression -> "HelloWorld"
+    // RLE -> "RLE(HelloWorld)"
+    // ZIP -> "ZIP(HelloWorld)"
+
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: 'HelloWorld\nRLE(HelloWorld)\nZIP(HelloWorld)' }
+      ],
+      hints: [
+        'std::function<std::string(const std::string&)> 作為策略型別',
+        'NoCompression lambda: [](const std::string& s) { return s; }',
+        'RLE lambda: [](const std::string& s) { return "RLE(" + s + ")"; }'
+      ]
+    }
+  },
+  {
+    id: 'visitor-pattern',
+    category: 'design-patterns',
+    title: '訪問者模式 (Visitor)',
+    description: '用 std::variant + std::visit 取代傳統的 double dispatch，實現簡潔的訪問者模式。',
+    difficulty: 'advanced',
+    content: `# 訪問者模式 (Visitor Pattern)
+
+## 傳統問題
+
+當你有一組不同型別的物件，想對它們執行不同操作，但不想在每個類別中加入新方法時，就需要 Visitor。
+
+## 傳統 vs Modern C++
+
+### 傳統做法：雙重分派 (Double Dispatch)
+
+需要大量樣板程式碼：accept/visit 虛擬函式對。
+
+### Modern C++：std::variant + std::visit
+
+C++17 的 \`std::variant\` 搭配 \`std::visit\` 完美實現 Visitor，**零成本、型別安全、程式碼簡潔**：
+
+\`\`\`cpp
+using Shape = std::variant<Circle, Rectangle, Triangle>;
+
+// Visitor 就是一個可呼叫物件
+double area(const Shape& shape) {
+    return std::visit([](const auto& s) { return s.area(); }, shape);
+}
+\`\`\`
+
+## Overloaded Pattern
+
+搭配 overloaded helper，可以對不同型別寫不同邏輯：
+
+\`\`\`cpp
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+std::visit(overloaded{
+    [](const Circle& c)    { /* ... */ },
+    [](const Rectangle& r) { /* ... */ },
+    [](const Triangle& t)  { /* ... */ },
+}, shape);
+\`\`\`
+
+## 為什麼比傳統 Visitor 好？
+
+| | 傳統 Visitor | variant + visit |
+|---|---|---|
+| 樣板程式碼 | 很多（accept/visit） | 幾乎沒有 |
+| 效能 | 虛擬函式呼叫 | 編譯期分派，零成本 |
+| 新增 Visitor | 容易 | 容易 |
+| 新增型別 | 需改所有 Visitor | 編譯器會提醒（如果 visit 不完整） |
+| 型別安全 | 弱 | 強（編譯期檢查） |
+
+## 應用場景
+
+- AST（抽象語法樹）處理
+- 序列化/反序列化
+- 圖形渲染
+- 編譯器/直譯器
+`,
+    codeExample: `#include <iostream>
+#include <variant>
+#include <vector>
+#include <string>
+#include <cmath>
+#include <numeric>
+
+// Overloaded helper（C++17 經典工具）
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+// ====== AST 範例：簡易運算式求值 ======
+
+struct Literal;
+struct Add;
+struct Multiply;
+
+using Expr = std::variant<Literal, Add, Multiply>;
+
+struct Literal {
+    double value;
+};
+
+// 需要 unique_ptr 因為 variant 是遞迴結構
+struct Add {
+    std::shared_ptr<Expr> left, right;
+};
+
+struct Multiply {
+    std::shared_ptr<Expr> left, right;
+};
+
+// Visitor 1: 求值
+double evaluate(const Expr& expr) {
+    return std::visit(overloaded{
+        [](const Literal& lit) -> double {
+            return lit.value;
+        },
+        [](const Add& add) -> double {
+            return evaluate(*add.left) + evaluate(*add.right);
+        },
+        [](const Multiply& mul) -> double {
+            return evaluate(*mul.left) * evaluate(*mul.right);
+        },
+    }, expr);
+}
+
+// Visitor 2: 轉字串
+std::string to_string(const Expr& expr) {
+    return std::visit(overloaded{
+        [](const Literal& lit) -> std::string {
+            // 去除尾部零
+            std::string s = std::to_string(lit.value);
+            s.erase(s.find_last_not_of('0') + 1, std::string::npos);
+            if (s.back() == '.') s.pop_back();
+            return s;
+        },
+        [](const Add& add) -> std::string {
+            return "(" + to_string(*add.left) + " + " + to_string(*add.right) + ")";
+        },
+        [](const Multiply& mul) -> std::string {
+            return "(" + to_string(*mul.left) + " * " + to_string(*mul.right) + ")";
+        },
+    }, expr);
+}
+
+// Helper
+auto lit(double v) { return std::make_shared<Expr>(Literal{v}); }
+auto add(std::shared_ptr<Expr> l, std::shared_ptr<Expr> r) {
+    return std::make_shared<Expr>(Add{l, r});
+}
+auto mul(std::shared_ptr<Expr> l, std::shared_ptr<Expr> r) {
+    return std::make_shared<Expr>(Multiply{l, r});
+}
+
+// ====== 形狀範例 ======
+
+struct Circle { double radius; };
+struct Rect { double w, h; };
+struct Triangle { double base, height; };
+
+using Shape = std::variant<Circle, Rect, Triangle>;
+
+int main() {
+    // AST: (3 + 4) * 2
+    auto expr = Expr{Multiply{
+        add(lit(3), lit(4)),
+        lit(2)
+    }};
+
+    std::cout << "Expression: " << to_string(expr) << std::endl;
+    std::cout << "Result: " << evaluate(expr) << std::endl;
+
+    // 形狀 Visitor
+    std::vector<Shape> shapes = {
+        Circle{5.0},
+        Rect{4.0, 6.0},
+        Triangle{3.0, 8.0},
+    };
+
+    std::cout << "--- Shapes ---" << std::endl;
+    for (const auto& shape : shapes) {
+        // area visitor
+        double area = std::visit(overloaded{
+            [](const Circle& c)   { return M_PI * c.radius * c.radius; },
+            [](const Rect& r)     { return r.w * r.h; },
+            [](const Triangle& t) { return 0.5 * t.base * t.height; },
+        }, shape);
+
+        // name visitor
+        std::string name = std::visit(overloaded{
+            [](const Circle&)   { return std::string("Circle"); },
+            [](const Rect&)     { return std::string("Rectangle"); },
+            [](const Triangle&) { return std::string("Triangle"); },
+        }, shape);
+
+        std::cout << name << ": area=" << area << std::endl;
+    }
+
+    return 0;
+}`,
+    exercise: {
+      title: '訪問者模式練習',
+      description: '用 std::variant + std::visit 實作一個日誌系統的 Visitor：\n1. 定義三種日誌事件：InfoEvent{msg}, WarningEvent{msg, code}, ErrorEvent{msg, code, stackTrace}\n2. 實作 format visitor 將事件格式化為字串\n3. 輸出格式化結果',
+      starterCode: `#include <iostream>
+#include <variant>
+#include <string>
+#include <vector>
+
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+// TODO: 定義三種 Event struct
+
+// TODO: 定義 LogEvent = std::variant<...>
+
+// TODO: 實作 format 函式
+
+int main() {
+    // TODO: 建立事件並格式化
+    // InfoEvent -> "[INFO] <msg>"
+    // WarningEvent -> "[WARN-<code>] <msg>"
+    // ErrorEvent -> "[ERROR-<code>] <msg> | <stackTrace>"
+
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: '[INFO] Server started\n[WARN-301] Deprecated API call\n[ERROR-500] Null pointer | main.cpp:42' }
+      ],
+      hints: [
+        '用 std::variant<InfoEvent, WarningEvent, ErrorEvent> 定義 LogEvent',
+        '用 overloaded + std::visit 對每種型別寫不同的格式化邏輯',
+        'ErrorEvent 需要三個欄位：msg, code, stackTrace'
+      ]
+    }
+  },
+  {
+    id: 'crtp-pattern',
+    category: 'design-patterns',
+    title: 'CRTP 靜態多態',
+    description: 'Curiously Recurring Template Pattern — 用模板實現編譯期多態，零成本取代虛擬函式。',
+    difficulty: 'advanced',
+    content: `# CRTP (Curiously Recurring Template Pattern)
+
+## 概念
+
+CRTP 是一種模板技巧，基底類別以衍生類別作為模板參數：
+
+\`\`\`cpp
+template<typename Derived>
+class Base {
+public:
+    void interface() {
+        static_cast<Derived*>(this)->implementation();
+    }
+};
+
+class Concrete : public Base<Concrete> {
+public:
+    void implementation() { /* ... */ }
+};
+\`\`\`
+
+## 為什麼使用 CRTP？
+
+### 靜態多態（Static Polymorphism）
+
+- 虛擬函式有 vtable 間接呼叫的成本
+- CRTP 在編譯期就解析呼叫，**零額外開銷**
+- 適合效能關鍵的程式碼（遊戲引擎、嵌入式系統、金融系統）
+
+### 效能對比
+
+\`\`\`
+虛擬函式呼叫：載入 vtable → 查表 → 間接跳轉 → 執行
+CRTP 呼叫：    直接內聯 → 執行（可被完全最佳化）
+\`\`\`
+
+## 常見用途
+
+### 1. 靜態介面 (Static Interface)
+
+\`\`\`cpp
+template<typename Derived>
+class Printable {
+public:
+    void print() const {
+        std::cout << static_cast<const Derived*>(this)->to_string();
+    }
+};
+\`\`\`
+
+### 2. Mixin（混入功能）
+
+\`\`\`cpp
+template<typename Derived>
+class Comparable {
+public:
+    bool operator>(const Derived& other) const {
+        return other < static_cast<const Derived&>(*this);
+    }
+    bool operator>=(const Derived& other) const {
+        return !(static_cast<const Derived&>(*this) < other);
+    }
+};
+\`\`\`
+
+### 3. 計數器 (Object Counter)
+
+\`\`\`cpp
+template<typename T>
+class Counter {
+    static inline int count_ = 0;
+public:
+    Counter() { ++count_; }
+    ~Counter() { --count_; }
+    static int count() { return count_; }
+};
+\`\`\`
+
+## CRTP vs 虛擬函式 vs Concepts
+
+| 特性 | 虛擬函式 | CRTP | Concepts (C++20) |
+|------|---------|------|---------|
+| 多態型別 | 執行期 | 編譯期 | 編譯期 |
+| 效能開銷 | vtable 間接呼叫 | 零成本 | 零成本 |
+| 可放入容器 | 可以 (base ptr) | 不行 (不同型別) | 不行 |
+| 語法複雜度 | 低 | 中 | 低 |
+
+## 何時使用 CRTP？
+
+- 需要編譯期多態且效能重要時
+- 提供 mixin 功能（可重用的行為）
+- 不需要在同一個容器中混合不同型別時
+- C++20 前的靜態介面（C++20 後考慮用 Concepts）
+`,
+    codeExample: `#include <iostream>
+#include <string>
+#include <vector>
+#include <cmath>
+#include <chrono>
+
+// ====== CRTP 靜態多態 ======
+
+// 靜態介面：Shape
+template<typename Derived>
+class ShapeBase {
+public:
+    double area() const {
+        return static_cast<const Derived*>(this)->area_impl();
+    }
+    std::string name() const {
+        return static_cast<const Derived*>(this)->name_impl();
+    }
+    void describe() const {
+        std::cout << name() << ": area=" << area() << std::endl;
+    }
+};
+
+class CRTPCircle : public ShapeBase<CRTPCircle> {
+    double r_;
+public:
+    explicit CRTPCircle(double r) : r_(r) {}
+    double area_impl() const { return M_PI * r_ * r_; }
+    std::string name_impl() const { return "Circle(r=" + std::to_string(static_cast<int>(r_)) + ")"; }
+};
+
+class CRTPRect : public ShapeBase<CRTPRect> {
+    double w_, h_;
+public:
+    CRTPRect(double w, double h) : w_(w), h_(h) {}
+    double area_impl() const { return w_ * h_; }
+    std::string name_impl() const { return "Rect(" + std::to_string(static_cast<int>(w_)) + "x" + std::to_string(static_cast<int>(h_)) + ")"; }
+};
+
+// ====== CRTP Mixin：Comparable ======
+
+template<typename Derived>
+class Comparable {
+public:
+    bool operator!=(const Derived& other) const {
+        return !(static_cast<const Derived&>(*this) == other);
+    }
+    bool operator>(const Derived& other) const {
+        return other < static_cast<const Derived&>(*this);
+    }
+    bool operator<=(const Derived& other) const {
+        return !(static_cast<const Derived&>(*this) > other);
+    }
+    bool operator>=(const Derived& other) const {
+        return !(static_cast<const Derived&>(*this) < other);
+    }
+};
+
+class Temperature : public Comparable<Temperature> {
+    double value_;
+public:
+    explicit Temperature(double v) : value_(v) {}
+    double value() const { return value_; }
+    bool operator==(const Temperature& other) const { return value_ == other.value_; }
+    bool operator<(const Temperature& other) const { return value_ < other.value_; }
+};
+
+// ====== CRTP Object Counter ======
+
+template<typename T>
+class ObjectCounter {
+    static inline int count_ = 0;
+public:
+    ObjectCounter() { ++count_; }
+    ObjectCounter(const ObjectCounter&) { ++count_; }
+    ~ObjectCounter() { --count_; }
+    static int alive() { return count_; }
+};
+
+class Widget : public ObjectCounter<Widget> {
+    std::string name_;
+public:
+    Widget(std::string name) : name_(std::move(name)) {}
+};
+
+class Gadget : public ObjectCounter<Gadget> {
+    int id_;
+public:
+    Gadget(int id) : id_(id) {}
+};
+
+int main() {
+    // 靜態多態
+    CRTPCircle c(5.0);
+    CRTPRect r(4.0, 6.0);
+    c.describe();
+    r.describe();
+
+    // Mixin: Comparable
+    Temperature hot(100.0), cold(0.0), warm(37.0);
+    std::cout << "--- Temperature ---" << std::endl;
+    std::cout << "100 > 0: " << (hot > cold ? "true" : "false") << std::endl;
+    std::cout << "37 <= 100: " << (warm <= hot ? "true" : "false") << std::endl;
+    std::cout << "0 >= 37: " << (cold >= warm ? "true" : "false") << std::endl;
+
+    // Object Counter
+    std::cout << "--- Counter ---" << std::endl;
+    {
+        Widget w1("A"), w2("B"), w3("C");
+        Gadget g1(1);
+        std::cout << "Widgets alive: " << Widget::alive() << std::endl;
+        std::cout << "Gadgets alive: " << Gadget::alive() << std::endl;
+    }
+    std::cout << "Widgets alive: " << Widget::alive() << std::endl;
+    std::cout << "Gadgets alive: " << Gadget::alive() << std::endl;
+
+    return 0;
+}`,
+    exercise: {
+      title: 'CRTP 練習',
+      description: '使用 CRTP 實作一個 Serializable mixin：\n1. 基底 CRTP 類別提供 serialize() 方法\n2. serialize() 呼叫衍生類別的 to_json_impl()\n3. 實作 User 和 Product 兩個可序列化的類別\n4. 輸出 JSON 字串',
+      starterCode: `#include <iostream>
+#include <string>
+
+// TODO: 實作 Serializable CRTP 基底類別
+
+// TODO: 實作 User : Serializable<User>
+// User 有 name 和 age
+// to_json_impl 回傳 {"name":"<name>","age":<age>}
+
+// TODO: 實作 Product : Serializable<Product>
+// Product 有 title 和 price
+// to_json_impl 回傳 {"title":"<title>","price":<price>}
+
+int main() {
+    User u("Alice", 30);
+    Product p("Laptop", 999);
+
+    std::cout << u.serialize() << std::endl;
+    std::cout << p.serialize() << std::endl;
+
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: '{"name":"Alice","age":30}\n{"title":"Laptop","price":999}' }
+      ],
+      hints: [
+        'template<typename Derived> class Serializable',
+        'serialize() 呼叫 static_cast<const Derived*>(this)->to_json_impl()',
+        '用 std::to_string 將數字轉字串'
+      ]
+    }
+  },
+
+  // ===== MORE SYSTEM PROGRAMMING =====
+  {
+    id: 'thread-pool',
+    category: 'system-programming',
+    title: '執行緒池 (Thread Pool)',
+    description: '實作一個實用的執行緒池，避免頻繁建立/銷毀執行緒的開銷。',
+    difficulty: 'advanced',
+    content: `# 執行緒池 (Thread Pool)
+
+## 為什麼需要執行緒池？
+
+- 建立/銷毀執行緒有顯著的系統開銷
+- 無限制建立執行緒可能耗盡系統資源
+- 執行緒池維護一組工作執行緒，重複利用
+
+## 核心元件
+
+1. **工作佇列 (Task Queue)**：存放待執行的任務
+2. **工作執行緒 (Worker Threads)**：從佇列取出任務執行
+3. **同步機制**：mutex + condition_variable
+
+## 設計要點
+
+\`\`\`
+ThreadPool
+├── workers_: vector<thread>     // 工作執行緒
+├── tasks_: queue<function>      // 任務佇列
+├── mutex_                       // 保護佇列
+├── cv_                          // 通知工作者
+├── stop_                        // 停止旗標
+├── submit(task) -> future       // 提交任務
+└── ~ThreadPool()                // 等待所有任務完成
+\`\`\`
+
+## 關鍵技術
+
+- \`std::packaged_task\` 包裝任務，取得 future
+- \`std::condition_variable\` 讓工作者等待新任務
+- \`std::shared_ptr\` 管理 packaged_task 的生命週期
+- RAII 確保執行緒池正確關閉
+
+## Best Practice
+
+- 執行緒數量通常設為 \`std::thread::hardware_concurrency()\`
+- 任務應該是獨立的，避免任務間的依賴
+- 避免在任務中持有鎖太久
+`,
+    codeExample: `#include <iostream>
+#include <vector>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <numeric>
+#include <cmath>
+
+class ThreadPool {
+    std::vector<std::thread> workers_;
+    std::queue<std::function<void()>> tasks_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+
+public:
+    explicit ThreadPool(size_t numThreads) {
+        for (size_t i = 0; i < numThreads; ++i) {
+            workers_.emplace_back([this] {
+                while (true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        cv_.wait(lock, [this] {
+                            return stop_ || !tasks_.empty();
+                        });
+                        if (stop_ && tasks_.empty()) return;
+                        task = std::move(tasks_.front());
+                        tasks_.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+
+    ~ThreadPool() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            worker.join();
+        }
+    }
+
+    template<typename F, typename... Args>
+    auto submit(F&& f, Args&&... args)
+        -> std::future<std::invoke_result_t<F, Args...>>
+    {
+        using ReturnType = std::invoke_result_t<F, Args...>;
+
+        auto task = std::make_shared<std::packaged_task<ReturnType()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+        );
+
+        std::future<ReturnType> result = task->get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            tasks_.emplace([task]() { (*task)(); });
+        }
+        cv_.notify_one();
+        return result;
+    }
+};
+
+// 模擬耗時計算
+bool is_prime(long long n) {
+    if (n < 2) return false;
+    for (long long i = 2; i * i <= n; ++i) {
+        if (n % i == 0) return false;
+    }
+    return true;
+}
+
+int main() {
+    const size_t numThreads = std::thread::hardware_concurrency();
+    std::cout << "Thread pool size: " << numThreads << std::endl;
+
+    ThreadPool pool(numThreads > 0 ? numThreads : 4);
+
+    // 提交多個質數檢查任務
+    std::vector<std::pair<long long, std::future<bool>>> results;
+    std::vector<long long> numbers = {
+        999999937, 999999893, 999999883, 999999877,
+        1000000007, 1000000009, 100, 200
+    };
+
+    for (auto n : numbers) {
+        auto future = pool.submit(is_prime, n);
+        results.emplace_back(n, std::move(future));
+    }
+
+    // 收集結果
+    for (auto& [num, future] : results) {
+        bool prime = future.get();
+        std::cout << num << " is " << (prime ? "prime" : "not prime") << std::endl;
+    }
+
+    // 提交計算任務
+    std::cout << "--- Computation ---" << std::endl;
+    auto sum_future = pool.submit([]() {
+        long long sum = 0;
+        for (long long i = 1; i <= 1000000; ++i) sum += i;
+        return sum;
+    });
+    std::cout << "Sum 1..1000000 = " << sum_future.get() << std::endl;
+
+    return 0;
+}`,
+    exercise: {
+      title: '執行緒池練習',
+      description: '使用執行緒池並行計算多個區間的累加和：\n1. 將 1 到 N 分成 4 個區間\n2. 每個區間提交到執行緒池計算\n3. 合併結果輸出總和',
+      starterCode: `#include <iostream>
+#include <vector>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <future>
+
+// TODO: 實作 ThreadPool 類別（可簡化版）
+
+long long range_sum(long long start, long long end) {
+    long long sum = 0;
+    for (long long i = start; i <= end; ++i) sum += i;
+    return sum;
+}
+
+int main() {
+    long long n;
+    std::cin >> n;
+
+    // TODO: 建立執行緒池
+    // TODO: 將 1..n 分成 4 段提交
+    // TODO: 合併結果並輸出
+
+    return 0;
+}`,
+      testCases: [
+        { input: '100', expectedOutput: '5050' },
+        { input: '1000000', expectedOutput: '500000500000' }
+      ],
+      hints: [
+        '區間劃分: chunk = n / 4',
+        '四個任務: [1, chunk], [chunk+1, 2*chunk], ...',
+        '用 future.get() 取得各區間結果後加總'
+      ]
+    }
+  },
+  {
+    id: 'atomic-lock-free',
+    category: 'system-programming',
+    title: '原子操作與無鎖程式設計',
+    description: '使用 std::atomic 實現無鎖資料結構，避免 mutex 的開銷。',
+    difficulty: 'advanced',
+    content: `# 原子操作與無鎖程式設計
+
+## 為什麼需要原子操作？
+
+- mutex 有加鎖/解鎖的開銷
+- mutex 可能導致執行緒阻塞和上下文切換
+- 對於簡單的計數器或旗標，atomic 更高效
+
+## std::atomic
+
+\`\`\`cpp
+std::atomic<int> counter{0};
+counter.fetch_add(1);   // 原子加法
+counter.load();         // 原子讀取
+counter.store(42);      // 原子寫入
+counter.compare_exchange_strong(expected, desired); // CAS
+\`\`\`
+
+## 記憶體順序 (Memory Order)
+
+控制原子操作的可見性保證：
+
+- \`memory_order_seq_cst\` — 預設，最嚴格（順序一致）
+- \`memory_order_acquire\` — 讀取端保證
+- \`memory_order_release\` — 寫入端保證
+- \`memory_order_relaxed\` — 最寬鬆，只保證原子性
+
+## CAS (Compare-And-Swap)
+
+無鎖程式設計的核心操作：
+
+\`\`\`cpp
+bool compare_exchange_strong(T& expected, T desired);
+// 如果 *this == expected，則設為 desired，回傳 true
+// 否則，expected = *this，回傳 false
+\`\`\`
+
+## 無鎖 Stack 的基本概念
+
+\`\`\`cpp
+// push: 用 CAS loop
+void push(T value) {
+    Node* new_node = new Node{value};
+    new_node->next = head_.load();
+    while (!head_.compare_exchange_weak(new_node->next, new_node));
+}
+\`\`\`
+
+## Best Practice
+
+- 簡單計數/旗標用 atomic
+- 複雜資料結構的無鎖實作要非常小心
+- 優先使用 \`seq_cst\`，只在效能瓶頸時考慮更弱的 order
+- 無鎖不代表無等待（lock-free ≠ wait-free）
+`,
+    codeExample: `#include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <chrono>
+#include <functional>
+
+// ====== 原子計數器 vs mutex 計數器 ======
+
+class AtomicCounter {
+    std::atomic<long long> count_{0};
+public:
+    void increment() { count_.fetch_add(1, std::memory_order_relaxed); }
+    long long get() const { return count_.load(std::memory_order_relaxed); }
+};
+
+class MutexCounter {
+    long long count_ = 0;
+    std::mutex mutex_;
+public:
+    void increment() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++count_;
+    }
+    long long get() const { return count_; }
+};
+
+// ====== Spinlock（自旋鎖）======
+
+class Spinlock {
+    std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+public:
+    void lock() {
+        while (flag_.test_and_set(std::memory_order_acquire)) {
+            // 自旋等待
+        }
+    }
+    void unlock() {
+        flag_.clear(std::memory_order_release);
+    }
+};
+
+// ====== 無鎖 SPSC 佇列概念（Single Producer Single Consumer）======
+
+template<typename T, size_t Capacity>
+class SPSCQueue {
+    std::array<T, Capacity> buffer_;
+    std::atomic<size_t> head_{0};
+    std::atomic<size_t> tail_{0};
+
+public:
+    bool push(const T& value) {
+        size_t tail = tail_.load(std::memory_order_relaxed);
+        size_t next = (tail + 1) % Capacity;
+        if (next == head_.load(std::memory_order_acquire))
+            return false; // 滿了
+        buffer_[tail] = value;
+        tail_.store(next, std::memory_order_release);
+        return true;
+    }
+
+    bool pop(T& value) {
+        size_t head = head_.load(std::memory_order_relaxed);
+        if (head == tail_.load(std::memory_order_acquire))
+            return false; // 空的
+        value = buffer_[head];
+        head_.store((head + 1) % Capacity, std::memory_order_release);
+        return true;
+    }
+};
+
+template<typename Counter>
+long long benchmark(const std::string& name, int numThreads, int opsPerThread) {
+    Counter counter;
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&counter, opsPerThread]() {
+            for (int j = 0; j < opsPerThread; ++j) {
+                counter.increment();
+            }
+        });
+    }
+    for (auto& t : threads) t.join();
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    std::cout << name << ": " << counter.get()
+              << " (time: " << us << "us)" << std::endl;
+    return counter.get();
+}
+
+int main() {
+    const int threads = 4;
+    const int ops = 100000;
+
+    std::cout << "=== Counter Benchmark ===" << std::endl;
+    benchmark<AtomicCounter>("Atomic ", threads, ops);
+    benchmark<MutexCounter>("Mutex  ", threads, ops);
+
+    // SPSC Queue 範例
+    std::cout << "=== SPSC Queue ===" << std::endl;
+    SPSCQueue<int, 1024> queue;
+    std::atomic<long long> sum{0};
+
+    std::thread producer([&queue]() {
+        for (int i = 1; i <= 100; ++i) {
+            while (!queue.push(i)) {} // 重試直到成功
+        }
+    });
+
+    std::thread consumer([&queue, &sum]() {
+        for (int i = 0; i < 100; ++i) {
+            int value;
+            while (!queue.pop(value)) {} // 重試直到有資料
+            sum.fetch_add(value);
+        }
+    });
+
+    producer.join();
+    consumer.join();
+    std::cout << "SPSC sum: " << sum.load() << std::endl;
+
+    // atomic_flag spinlock
+    std::cout << "=== Spinlock ===" << std::endl;
+    Spinlock spinlock;
+    int shared_value = 0;
+
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 4; ++i) {
+        workers.emplace_back([&]() {
+            for (int j = 0; j < 10000; ++j) {
+                spinlock.lock();
+                ++shared_value;
+                spinlock.unlock();
+            }
+        });
+    }
+    for (auto& w : workers) w.join();
+    std::cout << "Spinlock result: " << shared_value << std::endl;
+
+    return 0;
+}`,
+    exercise: {
+      title: '原子操作練習',
+      description: '實作一個 thread-safe 的原子統計器：\n1. 用 atomic 追蹤 min, max, sum, count\n2. 多執行緒同時提交數值\n3. 最後輸出統計結果',
+      starterCode: `#include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <climits>
+
+class AtomicStats {
+    std::atomic<long long> sum_{0};
+    std::atomic<int> count_{0};
+    std::atomic<int> min_{INT_MAX};
+    std::atomic<int> max_{INT_MIN};
+public:
+    void record(int value) {
+        sum_.fetch_add(value);
+        count_.fetch_add(1);
+
+        // TODO: 用 CAS loop 更新 min_
+        // TODO: 用 CAS loop 更新 max_
+    }
+
+    void print() const {
+        std::cout << "Count: " << count_.load() << std::endl;
+        std::cout << "Sum: " << sum_.load() << std::endl;
+        std::cout << "Min: " << min_.load() << std::endl;
+        std::cout << "Max: " << max_.load() << std::endl;
+    }
+};
+
+int main() {
+    AtomicStats stats;
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([&stats, t]() {
+            for (int i = 1; i <= 25; ++i) {
+                stats.record(t * 25 + i);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+
+    stats.print();
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: 'Count: 100\nSum: 5050\nMin: 1\nMax: 100' }
+      ],
+      hints: [
+        'CAS loop: int old = min_.load(); while (value < old && !min_.compare_exchange_weak(old, value));',
+        'compare_exchange_weak 失敗時會自動更新 old 為當前值',
+        'max_ 的邏輯類似但方向相反'
+      ]
+    }
+  },
+  {
+    id: 'coroutines-cpp20',
+    category: 'system-programming',
+    title: 'C++20 協程 (Coroutines)',
+    description: '使用 co_yield、co_return、co_await 實現惰性生成器與非同步流程。',
+    difficulty: 'advanced',
+    content: `# C++20 協程 (Coroutines)
+
+## 概念
+
+協程是可以**暫停和恢復**執行的函式。與普通函式不同，協程可以在中途暫停，讓出控制權，之後再從暫停處繼續。
+
+## 三個關鍵字
+
+- \`co_yield value\` — 產出一個值並暫停
+- \`co_return value\` — 回傳最終值並結束
+- \`co_await expr\` — 等待某個非同步操作完成
+
+只要函式體中出現這三個關鍵字之一，編譯器就會將它視為協程。
+
+## Generator（惰性生成器）
+
+最常見的協程用途 — 惰性產生一系列值：
+
+\`\`\`cpp
+Generator<int> fibonacci() {
+    int a = 0, b = 1;
+    while (true) {
+        co_yield a;
+        auto next = a + b;
+        a = b;
+        b = next;
+    }
+}
+\`\`\`
+
+## Promise Type
+
+協程需要一個 promise_type 來控制行為：
+
+\`\`\`
+Generator<T>
+├── promise_type
+│   ├── get_return_object()     // 建立 Generator
+│   ├── initial_suspend()       // 開始時暫停？
+│   ├── final_suspend()         // 結束時暫停？
+│   ├── yield_value(T)          // 處理 co_yield
+│   └── return_void()           // 處理 co_return
+└── handle_: coroutine_handle   // 控制協程的 handle
+\`\`\`
+
+## 注意事項
+
+- 協程機制是底層的，通常需要自定義 Generator 類別
+- C++23 的 \`std::generator\` 提供標準化的生成器（部分編譯器已支援）
+- 協程本身不是多執行緒，但可以搭配使用
+`,
+    codeExample: `#include <iostream>
+#include <coroutine>
+#include <optional>
+#include <vector>
+#include <string>
+
+// ====== Generator 類別 ======
+template<typename T>
+class Generator {
+public:
+    struct promise_type {
+        T current_value;
+
+        Generator get_return_object() {
+            return Generator{
+                std::coroutine_handle<promise_type>::from_promise(*this)
+            };
+        }
+
+        std::suspend_always initial_suspend() { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+
+        std::suspend_always yield_value(T value) {
+            current_value = std::move(value);
+            return {};
+        }
+
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+
+    using Handle = std::coroutine_handle<promise_type>;
+
+    explicit Generator(Handle h) : handle_(h) {}
+    ~Generator() { if (handle_) handle_.destroy(); }
+
+    // 禁止拷貝
+    Generator(const Generator&) = delete;
+    Generator& operator=(const Generator&) = delete;
+
+    // 允許移動
+    Generator(Generator&& other) noexcept : handle_(other.handle_) {
+        other.handle_ = nullptr;
+    }
+
+    bool next() {
+        if (!handle_ || handle_.done()) return false;
+        handle_.resume();
+        return !handle_.done();
+    }
+
+    T value() const { return handle_.promise().current_value; }
+
+private:
+    Handle handle_;
+};
+
+// ====== 各種 Generator 範例 ======
+
+// Fibonacci 數列
+Generator<long long> fibonacci(int count) {
+    long long a = 0, b = 1;
+    for (int i = 0; i < count; ++i) {
+        co_yield a;
+        auto next = a + b;
+        a = b;
+        b = next;
+    }
+}
+
+// Range 生成器
+Generator<int> range(int start, int end, int step = 1) {
+    for (int i = start; i < end; i += step) {
+        co_yield i;
+    }
+}
+
+// 過濾生成器
+Generator<int> filter_even(Generator<int> gen) {
+    while (gen.next()) {
+        int v = gen.value();
+        if (v % 2 == 0) {
+            co_yield v;
+        }
+    }
+}
+
+// 字串分割生成器
+Generator<std::string> split(const std::string& s, char delimiter) {
+    std::string token;
+    for (char c : s) {
+        if (c == delimiter) {
+            if (!token.empty()) {
+                co_yield token;
+                token.clear();
+            }
+        } else {
+            token += c;
+        }
+    }
+    if (!token.empty()) {
+        co_yield token;
+    }
+}
+
+int main() {
+    // Fibonacci
+    std::cout << "Fibonacci: ";
+    auto fib = fibonacci(10);
+    while (fib.next()) {
+        std::cout << fib.value() << " ";
+    }
+    std::cout << std::endl;
+
+    // Range
+    std::cout << "Range(0,10,2): ";
+    auto r = range(0, 10, 2);
+    while (r.next()) {
+        std::cout << r.value() << " ";
+    }
+    std::cout << std::endl;
+
+    // Filter
+    std::cout << "Even in 1..20: ";
+    auto evens = filter_even(range(1, 21));
+    while (evens.next()) {
+        std::cout << evens.value() << " ";
+    }
+    std::cout << std::endl;
+
+    // Split
+    std::cout << "Split: ";
+    auto tokens = split("Hello,World,Modern,CPP", ',');
+    while (tokens.next()) {
+        std::cout << "[" << tokens.value() << "] ";
+    }
+    std::cout << std::endl;
+
+    return 0;
+}`,
+    exercise: {
+      title: '協程 Generator 練習',
+      description: '使用上面的 Generator 類別，實作：\n1. 一個 squares 生成器：產出 1, 4, 9, 16, 25...\n2. 一個 take 生成器：從另一個生成器取前 N 個值\n3. 組合使用並輸出前 5 個平方數',
+      starterCode: `#include <iostream>
+#include <coroutine>
+
+// Generator 類別（同上面的範例）
+template<typename T>
+class Generator {
+public:
+    struct promise_type {
+        T current_value;
+        Generator get_return_object() {
+            return Generator{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        std::suspend_always yield_value(T value) {
+            current_value = std::move(value);
+            return {};
+        }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+
+    using Handle = std::coroutine_handle<promise_type>;
+    explicit Generator(Handle h) : handle_(h) {}
+    ~Generator() { if (handle_) handle_.destroy(); }
+    Generator(const Generator&) = delete;
+    Generator(Generator&& o) noexcept : handle_(o.handle_) { o.handle_ = nullptr; }
+    bool next() { if (!handle_ || handle_.done()) return false; handle_.resume(); return !handle_.done(); }
+    T value() const { return handle_.promise().current_value; }
+private:
+    Handle handle_;
+};
+
+// TODO: 實作 squares() 生成器（無限）
+// TODO: 實作 take(Generator<T>, n) 生成器
+
+int main() {
+    auto result = take(squares(), 5);
+    bool first = true;
+    while (result.next()) {
+        if (!first) std::cout << " ";
+        std::cout << result.value();
+        first = false;
+    }
+    std::cout << std::endl;
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: '1 4 9 16 25' }
+      ],
+      hints: [
+        'squares: for (int i = 1; ; ++i) co_yield i * i;',
+        'take: 迴圈 n 次，每次 gen.next() 後 co_yield gen.value()',
+        '無限生成器 + take 組合是協程的經典用法'
+      ]
+    }
+  },
+  {
+    id: 'memory-model-alignment',
+    category: 'system-programming',
+    title: '記憶體管理與 Allocator',
+    description: '深入理解 C++ 記憶體模型、自定義 Allocator、記憶體對齊與 placement new。',
+    difficulty: 'advanced',
+    content: `# 記憶體管理與 Allocator
+
+## C++ 記憶體區域
+
+- **Stack（堆疊）**：區域變數，自動管理，速度最快
+- **Heap（堆積）**：動態配置 (new/delete)，需要手動或 RAII 管理
+- **Static/Global**：全域/靜態變數
+- **Thread-local**：每個執行緒獨立的儲存
+
+## alignas 與 alignof
+
+C++11 提供明確控制記憶體對齊：
+
+\`\`\`cpp
+struct alignas(64) CacheLine {
+    int data[16]; // 對齊到 64 bytes（CPU 快取行）
+};
+std::cout << alignof(CacheLine); // 64
+\`\`\`
+
+## placement new
+
+在指定的記憶體位置建構物件：
+
+\`\`\`cpp
+alignas(T) unsigned char buffer[sizeof(T)];
+T* obj = new (buffer) T(args...);
+obj->~T(); // 手動呼叫解構函式
+\`\`\`
+
+## 自定義 Allocator
+
+STL 容器可以使用自定義的配置器：
+
+\`\`\`cpp
+template<typename T>
+class PoolAllocator {
+    // ...
+    T* allocate(size_t n);
+    void deallocate(T* p, size_t n);
+};
+
+std::vector<int, PoolAllocator<int>> vec;
+\`\`\`
+
+## 記憶體池 (Memory Pool)
+
+- 預先配置一大塊記憶體
+- 從池中分配/回收小塊記憶體
+- 避免頻繁的系統呼叫
+- 減少記憶體碎片
+
+## Best Practice
+
+- 理解你的資料在記憶體中的佈局（cache friendly）
+- 對效能關鍵的資料結構使用對齊
+- 頻繁配置/釋放小物件時考慮記憶體池
+- 使用 PMR (Polymorphic Memory Resource, C++17) 簡化自定義配置
+`,
+    codeExample: `#include <iostream>
+#include <vector>
+#include <memory>
+#include <cstddef>
+#include <new>
+#include <chrono>
+#include <array>
+
+// ====== 記憶體對齊 ======
+
+struct Normal {
+    char a;    // 1 byte
+    int b;     // 4 bytes
+    char c;    // 1 byte
+};  // sizeof = 12 (有 padding)
+
+struct Packed {
+    int b;     // 4 bytes
+    char a;    // 1 byte
+    char c;    // 1 byte
+};  // sizeof = 8 (更緊湊)
+
+struct alignas(64) CacheAligned {
+    int data[4];
+};
+
+// ====== 簡易記憶體池 ======
+
+template<typename T, size_t PoolSize = 1024>
+class SimplePool {
+    union Block {
+        T data;
+        Block* next;
+        Block() {}
+        ~Block() {}
+    };
+
+    std::array<Block, PoolSize> pool_;
+    Block* free_list_ = nullptr;
+    size_t allocated_ = 0;
+
+public:
+    SimplePool() {
+        // 建立 free list
+        for (size_t i = 0; i < PoolSize - 1; ++i) {
+            pool_[i].next = &pool_[i + 1];
+        }
+        pool_[PoolSize - 1].next = nullptr;
+        free_list_ = &pool_[0];
+    }
+
+    T* allocate() {
+        if (!free_list_) return nullptr;
+        Block* block = free_list_;
+        free_list_ = block->next;
+        ++allocated_;
+        return reinterpret_cast<T*>(block);
+    }
+
+    void deallocate(T* ptr) {
+        Block* block = reinterpret_cast<Block*>(ptr);
+        block->next = free_list_;
+        free_list_ = block;
+        --allocated_;
+    }
+
+    size_t allocated() const { return allocated_; }
+    size_t capacity() const { return PoolSize; }
+};
+
+// ====== Placement New 範例 ======
+
+class Sensor {
+    int id_;
+    double value_;
+public:
+    Sensor(int id, double val) : id_(id), value_(val) {
+        std::cout << "Sensor " << id_ << " constructed (val=" << value_ << ")" << std::endl;
+    }
+    ~Sensor() {
+        std::cout << "Sensor " << id_ << " destroyed" << std::endl;
+    }
+    void read() const {
+        std::cout << "Sensor " << id_ << ": " << value_ << std::endl;
+    }
+};
+
+int main() {
+    // 記憶體佈局
+    std::cout << "=== Memory Layout ===" << std::endl;
+    std::cout << "sizeof(Normal): " << sizeof(Normal) << std::endl;
+    std::cout << "sizeof(Packed): " << sizeof(Packed) << std::endl;
+    std::cout << "sizeof(CacheAligned): " << sizeof(CacheAligned) << std::endl;
+    std::cout << "alignof(CacheAligned): " << alignof(CacheAligned) << std::endl;
+
+    // 記憶體池
+    std::cout << "=== Memory Pool ===" << std::endl;
+    SimplePool<int, 100> pool;
+
+    std::vector<int*> ptrs;
+    for (int i = 0; i < 5; ++i) {
+        int* p = pool.allocate();
+        *p = i * 10;
+        ptrs.push_back(p);
+    }
+
+    std::cout << "Allocated: " << pool.allocated() << std::endl;
+    for (auto* p : ptrs) {
+        std::cout << *p << " ";
+    }
+    std::cout << std::endl;
+
+    for (auto* p : ptrs) pool.deallocate(p);
+    std::cout << "After free: " << pool.allocated() << std::endl;
+
+    // Placement new
+    std::cout << "=== Placement New ===" << std::endl;
+    alignas(Sensor) unsigned char buffer[sizeof(Sensor) * 2];
+
+    Sensor* s1 = new (buffer) Sensor(1, 23.5);
+    Sensor* s2 = new (buffer + sizeof(Sensor)) Sensor(2, 37.8);
+
+    s1->read();
+    s2->read();
+
+    // 手動解構（反序）
+    s2->~Sensor();
+    s1->~Sensor();
+
+    return 0;
+}`,
+    exercise: {
+      title: '記憶體管理練習',
+      description: '實作一個固定大小的 Stack Allocator：\n1. 預先配置一塊固定大小的記憶體 (buffer)\n2. 用 offset 追蹤已使用的位置\n3. allocate(n) 回傳 n bytes 的指標\n4. reset() 重置 offset 為 0\n5. 測試並輸出配置結果',
+      starterCode: `#include <iostream>
+#include <cstddef>
+#include <new>
+
+class StackAllocator {
+    unsigned char* buffer_;
+    size_t capacity_;
+    size_t offset_ = 0;
+public:
+    StackAllocator(size_t capacity)
+        : buffer_(new unsigned char[capacity]), capacity_(capacity) {}
+    ~StackAllocator() { delete[] buffer_; }
+
+    // TODO: 實作 allocate(size_t bytes) -> void*
+    // 回傳目前 offset 位置的指標，並前進 offset
+    // 如果空間不足回傳 nullptr
+
+    // TODO: 實作 reset()
+
+    size_t used() const { return offset_; }
+    size_t capacity() const { return capacity_; }
+};
+
+int main() {
+    StackAllocator alloc(256);
+
+    // 配置 3 個 int
+    int* a = static_cast<int*>(alloc.allocate(sizeof(int)));
+    int* b = static_cast<int*>(alloc.allocate(sizeof(int)));
+    int* c = static_cast<int*>(alloc.allocate(sizeof(int)));
+
+    *a = 10; *b = 20; *c = 30;
+    std::cout << *a << " " << *b << " " << *c << std::endl;
+    std::cout << "Used: " << alloc.used() << std::endl;
+
+    alloc.reset();
+    std::cout << "After reset: " << alloc.used() << std::endl;
+
+    return 0;
+}`,
+      testCases: [
+        { input: '', expectedOutput: '10 20 30\nUsed: 12\nAfter reset: 0' }
+      ],
+      hints: [
+        'allocate: 檢查 offset_ + bytes <= capacity_',
+        '回傳 buffer_ + offset_ 並更新 offset_ += bytes',
+        'reset: offset_ = 0'
+      ]
+    }
+  },
 ];
