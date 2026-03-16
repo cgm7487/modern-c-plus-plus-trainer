@@ -7,6 +7,10 @@ import {
   XCircle,
   Terminal,
   Code,
+  Lightbulb,
+  Eye,
+  EyeOff,
+  BookOpen,
 } from 'lucide-react';
 import CodeEditor from '../components/CodeEditor';
 import MarkdownRenderer from '../components/MarkdownRenderer';
@@ -19,6 +23,9 @@ function ExercisePage() {
   const [testResults, setTestResults] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [codeValue, setCodeValue] = useState('');
+  const [revealedHints, setRevealedHints] = useState(0);
+  const [showSolution, setShowSolution] = useState(false);
+  const [solutionConfirm, setSolutionConfirm] = useState(false);
 
   const exercise = topic?.exercise;
   const testCases = exercise?.testCases || [];
@@ -137,6 +144,94 @@ function ExercisePage() {
             </button>
           </div>
         </div>
+
+        {/* Hints Section */}
+        {exercise.hints && exercise.hints.length > 0 && (
+          <div className="hints-section">
+            <div className="hints-header">
+              <h2 className="topic-section-title">
+                <Lightbulb size={20} />
+                提示 ({revealedHints}/{exercise.hints.length})
+              </h2>
+              {revealedHints < exercise.hints.length && (
+                <button
+                  className="btn-hint"
+                  onClick={() => setRevealedHints((prev) => prev + 1)}
+                >
+                  <Eye size={14} />
+                  顯示下一個提示
+                </button>
+              )}
+            </div>
+            {revealedHints > 0 && (
+              <div className="hints-list">
+                {exercise.hints.slice(0, revealedHints).map((hint, i) => (
+                  <div key={i} className="hint-item">
+                    <span className="hint-number">提示 {i + 1}</span>
+                    <span className="hint-text">{hint}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {revealedHints === 0 && (
+              <p className="hints-empty">卡住了嗎？點擊上方按鈕逐步查看提示。</p>
+            )}
+          </div>
+        )}
+
+        {/* Solution Section */}
+        {exercise.solution && (
+          <div className="solution-section">
+            <div className="solution-header">
+              <h2 className="topic-section-title">
+                <BookOpen size={20} />
+                參考解答
+              </h2>
+              {!showSolution && !solutionConfirm && (
+                <button
+                  className="btn-solution"
+                  onClick={() => setSolutionConfirm(true)}
+                >
+                  <Eye size={14} />
+                  查看解答
+                </button>
+              )}
+              {showSolution && (
+                <button
+                  className="btn-solution"
+                  onClick={() => { setShowSolution(false); setSolutionConfirm(false); }}
+                >
+                  <EyeOff size={14} />
+                  隱藏解答
+                </button>
+              )}
+            </div>
+            {solutionConfirm && !showSolution && (
+              <div className="solution-confirm">
+                <p>確定要查看解答嗎？建議先嘗試使用提示自行完成。</p>
+                <div className="solution-confirm-actions">
+                  <button
+                    className="btn-confirm-yes"
+                    onClick={() => setShowSolution(true)}
+                  >
+                    確定查看
+                  </button>
+                  <button
+                    className="btn-confirm-no"
+                    onClick={() => setSolutionConfirm(false)}
+                  >
+                    再想想
+                  </button>
+                </div>
+              </div>
+            )}
+            {showSolution && (
+              <div className="solution-code">
+                <pre><code>{exercise.solution}</code></pre>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Test Cases */}
         <div className="test-cases-section">

@@ -143,7 +143,28 @@ int main() {
         '使用 std::vector<std::pair<std::string, int>> 儲存資料',
         '用 auto& 來避免不必要的拷貝',
         '可以用 auto best = students[0] 初始化最佳學生'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+#include <string>
+#include <utility>
+
+int main() {
+    std::vector<std::pair<std::string, int>> students = {
+        {"Alice", 85}, {"Bob", 92}, {"Charlie", 78}, {"Diana", 95}
+    };
+
+    auto best = students[0];
+    for (const auto& s : students) {
+        if (s.second > best.second) {
+            best = s;
+        }
+    }
+
+    std::cout << "Best: " << best.first << " " << best.second << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -266,7 +287,34 @@ int main() {
         '用 auto& 才能修改原始值',
         '判斷奇數: x % 2 != 0',
         '可以用另一個 range-based for 搭配 const auto& 來加總'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+
+int main() {
+    int n;
+    std::cin >> n;
+
+    std::vector<int> nums(n);
+    for (auto& x : nums) {
+        std::cin >> x;
+    }
+
+    for (auto& x : nums) {
+        if (x % 2 != 0) {
+            x *= 2;
+        }
+    }
+
+    int sum = 0;
+    for (const auto& x : nums) {
+        sum += x;
+    }
+
+    std::cout << sum << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -407,7 +455,35 @@ int main() {
         'std::sort 的比較函式: [](int a, int b) { return std::abs(a) < std::abs(b); }',
         'std::count_if 回傳滿足條件的元素數量',
         '正數條件: x > 0'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <cmath>
+
+int main() {
+    int n;
+    std::cin >> n;
+    std::vector<int> nums(n);
+    for (auto& x : nums) std::cin >> x;
+
+    std::sort(nums.begin(), nums.end(), [](int a, int b) {
+        return std::abs(a) < std::abs(b);
+    });
+
+    auto positiveCount = std::count_if(nums.begin(), nums.end(), [](int x) {
+        return x > 0;
+    });
+
+    for (int i = 0; i < n; i++) {
+        if (i > 0) std::cout << " ";
+        std::cout << nums[i];
+    }
+    std::cout << std::endl;
+    std::cout << positiveCount << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -548,7 +624,38 @@ int main() {
         '使用 std::make_shared<Widget>(id) 建立',
         'sp.use_count() 取得引用計數',
         'vector.clear() 清空容器'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <memory>
+#include <vector>
+
+class Widget {
+    int id_;
+public:
+    Widget(int id) : id_(id) {
+        std::cout << "Widget " << id_ << " created" << std::endl;
+    }
+    ~Widget() {
+        std::cout << "Widget " << id_ << " destroyed" << std::endl;
+    }
+    int id() const { return id_; }
+};
+
+int main() {
+    std::vector<std::shared_ptr<Widget>> widgets;
+    for (int i = 1; i <= 3; i++) {
+        widgets.push_back(std::make_shared<Widget>(i));
+    }
+
+    for (const auto& w : widgets) {
+        std::cout << "Widget " << w->id() << " count: " << w.use_count() << std::endl;
+    }
+
+    widgets.clear();
+
+    std::cout << "Done" << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -730,7 +837,56 @@ int main() {
         '移動建構：接管 other 的 data_ 和 size_，將 other 設為空',
         '記得加 noexcept',
         '移動後 other.data_ = nullptr, other.size_ = 0'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <utility>
+
+class DynamicArray {
+    int* data_;
+    int size_;
+public:
+    DynamicArray(int size) : data_(new int[size]), size_(size) {
+        for (int i = 0; i < size; i++) data_[i] = i + 1;
+        std::cout << "Created: size=" << size_ << std::endl;
+    }
+    ~DynamicArray() { delete[] data_; }
+
+    DynamicArray(DynamicArray&& other) noexcept
+        : data_(other.data_), size_(other.size_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+    }
+
+    DynamicArray& operator=(DynamicArray&& other) noexcept {
+        if (this != &other) {
+            delete[] data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+        }
+        return *this;
+    }
+
+    int size() const { return size_; }
+    int sum() const {
+        int s = 0;
+        for (int i = 0; i < size_; i++) s += data_[i];
+        return s;
+    }
+};
+
+int main() {
+    DynamicArray a(5);
+    std::cout << "a: size=" << a.size() << " sum=" << a.sum() << std::endl;
+
+    DynamicArray b = std::move(a);
+    std::cout << "After move:" << std::endl;
+    std::cout << "a: size=" << a.size() << std::endl;
+    std::cout << "b: size=" << b.size() << " sum=" << b.sum() << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -846,7 +1002,26 @@ int main() {
         'Base case: 只有一個參數時直接回傳',
         '遞迴: max_of(first, rest...) = std::max(first, max_of(rest...))',
         '或使用 fold expression 搭配 std::max'
-      ]
+      ],
+      solution: `#include <iostream>
+
+template<typename T>
+T max_of(T value) {
+    return value;
+}
+
+template<typename T, typename... Args>
+T max_of(T first, Args... rest) {
+    T rest_max = max_of(rest...);
+    return first > rest_max ? first : rest_max;
+}
+
+int main() {
+    std::cout << max_of(3, 7, 2, 9, 4) << std::endl;
+    std::cout << max_of(1.5, 3.7, 2.1) << std::endl;
+    std::cout << max_of(42) << std::endl;
+    return 0;
+}`
     }
   },
 
@@ -974,7 +1149,43 @@ int main() {
         '用 auto [name, score] 解構 pair',
         '初始化 max/min 為第一個學生',
         'for (const auto& [name, score] : students)'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+#include <string>
+#include <utility>
+
+int main() {
+    int n;
+    std::cin >> n;
+
+    std::vector<std::pair<std::string, int>> students;
+    for (int i = 0; i < n; i++) {
+        std::string name;
+        int score;
+        std::cin >> name >> score;
+        students.emplace_back(name, score);
+    }
+
+    auto [maxName, maxScore] = students[0];
+    auto [minName, minScore] = students[0];
+
+    for (const auto& [name, score] : students) {
+        if (score > maxScore) {
+            maxName = name;
+            maxScore = score;
+        }
+        if (score < minScore) {
+            minName = name;
+            minScore = score;
+        }
+    }
+
+    std::cout << "Max: " << maxName << " " << maxScore << std::endl;
+    std::cout << "Min: " << minName << " " << minScore << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -1117,7 +1328,31 @@ int main() {
         '用 try { return std::stoi(s); } catch (...) { return std::nullopt; }',
         'std::stoi 會把 "12.5" 轉成 12',
         'std::stoi 對非數字字串會拋出 std::invalid_argument'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <optional>
+#include <string>
+
+std::optional<int> safe_stoi(const std::string& s) {
+    try {
+        return std::stoi(s);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+int main() {
+    std::string s;
+    while (std::cin >> s) {
+        auto result = safe_stoi(s);
+        if (result) {
+            std::cout << "Valid: " << *result << std::endl;
+        } else {
+            std::cout << "Invalid" << std::endl;
+        }
+    }
+    return 0;
+}`
     }
   },
   {
@@ -1265,7 +1500,36 @@ int main() {
         'concept Sortable = requires(T a, T b) { { a < b } -> std::convertible_to<bool>; }',
         '函式簽名: template<Sortable T> void my_sort(std::vector<T>& v)',
         '內部直接用 std::sort'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <concepts>
+#include <vector>
+#include <string>
+#include <algorithm>
+
+template<typename T>
+concept Sortable = requires(T a, T b) {
+    { a < b } -> std::convertible_to<bool>;
+};
+
+template<Sortable T>
+void my_sort(std::vector<T>& v) {
+    std::sort(v.begin(), v.end());
+}
+
+int main() {
+    std::vector<int> nums = {5, 2, 8, 1, 9};
+    my_sort(nums);
+    for (const auto& n : nums) std::cout << n << " ";
+    std::cout << std::endl;
+
+    std::vector<std::string> words = {"banana", "apple", "cherry"};
+    my_sort(words);
+    for (const auto& w : words) std::cout << w << " ";
+    std::cout << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -1388,7 +1652,30 @@ int main() {
         'std::views::transform([](int n){ return n * n; })',
         'std::views::take(3)',
         '用 | 管線連接'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+#include <ranges>
+
+int main() {
+    int n;
+    std::cin >> n;
+    std::vector<int> nums(n);
+    for (auto& x : nums) std::cin >> x;
+
+    bool first = true;
+    for (auto val : nums
+            | std::views::filter([](int n){ return n % 2 == 0; })
+            | std::views::transform([](int n){ return n * n; })
+            | std::views::take(3)) {
+        if (!first) std::cout << " ";
+        std::cout << val;
+        first = false;
+    }
+    std::cout << std::endl;
+
+    return 0;
+}`
     }
   },
 
@@ -1541,7 +1828,41 @@ int main() {
         '用 bool active_ 追蹤是否需要呼叫',
         'dismiss() 設定 active_ = false',
         '解構函式中檢查 active_ 後再呼叫'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <functional>
+
+class ScopeGuard {
+    std::function<void()> func_;
+    bool active_ = true;
+public:
+    ScopeGuard(std::function<void()> func) : func_(std::move(func)) {}
+    ~ScopeGuard() {
+        if (active_ && func_) func_();
+    }
+    void dismiss() { active_ = false; }
+    ScopeGuard(const ScopeGuard&) = delete;
+    ScopeGuard& operator=(const ScopeGuard&) = delete;
+};
+
+int main() {
+    std::cout << "Start" << std::endl;
+    {
+        ScopeGuard guard([]() {
+            std::cout << "Cleanup 1" << std::endl;
+        });
+    }
+
+    {
+        ScopeGuard guard([]() {
+            std::cout << "Cleanup 2" << std::endl;
+        });
+        guard.dismiss();
+    }
+
+    std::cout << "End" << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -1705,7 +2026,40 @@ int main() {
         'getName() 應該是 const 成員函式，回傳 const string&',
         'getAverage() 應該是 const 成員函式',
         'printStudent 參數應改為 const Student&'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <string>
+#include <vector>
+
+class Student {
+    std::string name_;
+    std::vector<int> grades_;
+public:
+    Student(std::string name) : name_(std::move(name)) {}
+
+    const std::string& getName() const { return name_; }
+
+    void addGrade(int grade) { grades_.push_back(grade); }
+
+    double getAverage() const {
+        double sum = 0;
+        for (const auto& g : grades_) sum += g;
+        return grades_.empty() ? 0 : sum / grades_.size();
+    }
+};
+
+void printStudent(const Student& s) {
+    std::cout << s.getName() << ": " << s.getAverage() << std::endl;
+}
+
+int main() {
+    Student s("Alice");
+    s.addGrade(90);
+    s.addGrade(85);
+    s.addGrade(92);
+    printStudent(s);
+    return 0;
+}`
     }
   },
 
@@ -1840,7 +2194,37 @@ int main() {
         '使用 static 局部變數實現單例',
         '刪除拷貝建構和賦值',
         '用 int count_ 成員計數'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <string>
+
+class Logger {
+    int count_ = 0;
+    Logger() = default;
+public:
+    Logger(const Logger&) = delete;
+    Logger& operator=(const Logger&) = delete;
+
+    static Logger& instance() {
+        static Logger inst;
+        return inst;
+    }
+
+    void log(const std::string& message) {
+        std::cout << "[LOG] " << message << std::endl;
+        ++count_;
+    }
+
+    int count() const { return count_; }
+};
+
+int main() {
+    Logger::instance().log("App started");
+    Logger::instance().log("Processing data");
+    Logger::instance().log("App finished");
+    std::cout << "Total: " << Logger::instance().count() << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -1985,7 +2369,44 @@ int main() {
         '觀察者類型: std::function<void(const string&, double, double)>',
         '用 vector 儲存觀察者',
         'setPrice 時先保存舊價格再更新'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <string>
+#include <vector>
+#include <functional>
+
+class Stock {
+    std::string name_;
+    double price_;
+    std::vector<std::function<void(const std::string&, double, double)>> observers_;
+public:
+    Stock(const std::string& name, double price) : name_(name), price_(price) {}
+
+    void addObserver(std::function<void(const std::string&, double, double)> observer) {
+        observers_.push_back(std::move(observer));
+    }
+
+    void setPrice(double newPrice) {
+        double oldPrice = price_;
+        price_ = newPrice;
+        for (const auto& observer : observers_) {
+            observer(name_, oldPrice, newPrice);
+        }
+    }
+};
+
+int main() {
+    Stock apple("AAPL", 150.0);
+
+    apple.addObserver([](const std::string& name, double oldP, double newP) {
+        std::cout << name << ": $" << oldP << " -> $" << newP << std::endl;
+    });
+
+    apple.setPrice(155.0);
+    apple.setPrice(148.0);
+
+    return 0;
+}`
     }
   },
   {
@@ -2138,7 +2559,59 @@ int main() {
         '純虛函式: virtual std::string name() const = 0;',
         '工廠可以用 if-else 或 map 實作',
         '回傳 std::unique_ptr<Beverage>'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <memory>
+#include <string>
+
+class Beverage {
+public:
+    virtual ~Beverage() = default;
+    virtual std::string name() const = 0;
+    virtual double price() const = 0;
+};
+
+class Coffee : public Beverage {
+public:
+    std::string name() const override { return "Coffee"; }
+    double price() const override { return 4.5; }
+};
+
+class Tea : public Beverage {
+public:
+    std::string name() const override { return "Tea"; }
+    double price() const override { return 3; }
+};
+
+class Juice : public Beverage {
+public:
+    std::string name() const override { return "Juice"; }
+    double price() const override { return 5; }
+};
+
+class BeverageFactory {
+public:
+    std::unique_ptr<Beverage> create(const std::string& type) const {
+        if (type == "coffee") return std::make_unique<Coffee>();
+        if (type == "tea") return std::make_unique<Tea>();
+        if (type == "juice") return std::make_unique<Juice>();
+        return nullptr;
+    }
+};
+
+int main() {
+    BeverageFactory factory;
+
+    auto coffee = factory.create("coffee");
+    auto tea = factory.create("tea");
+    auto juice = factory.create("juice");
+
+    if (coffee) std::cout << coffee->name() << ": $" << coffee->price() << std::endl;
+    if (tea) std::cout << tea->name() << ": $" << tea->price() << std::endl;
+    if (juice) std::cout << juice->name() << ": $" << juice->price() << std::endl;
+
+    return 0;
+}`
     }
   },
 
@@ -2318,7 +2791,55 @@ int main() {
         '用 std::lock_guard<std::mutex> 保護存取',
         'withdraw 要檢查餘額是否足夠',
         '每個方法都需要鎖定 mutex_'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <thread>
+#include <mutex>
+#include <vector>
+
+class BankAccount {
+    double balance_;
+    std::mutex mutex_;
+public:
+    BankAccount(double initial) : balance_(initial) {}
+
+    void deposit(double amount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        balance_ += amount;
+    }
+
+    void withdraw(double amount) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (amount <= balance_) {
+            balance_ -= amount;
+        }
+    }
+
+    double balance() const { return balance_; }
+};
+
+int main() {
+    BankAccount account(1000.0);
+
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < 5; i++) {
+        threads.emplace_back([&account]() {
+            account.deposit(100.0);
+        });
+    }
+
+    for (int i = 0; i < 3; i++) {
+        threads.emplace_back([&account]() {
+            account.withdraw(100.0);
+        });
+    }
+
+    for (auto& t : threads) t.join();
+
+    std::cout << "Balance: " << account.balance() << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -2468,7 +2989,35 @@ int main() {
         '平方和: sum of (x * x) for each x',
         '用 std::async 啟動兩個任務',
         '用 future.get() 取得結果後相加'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <future>
+#include <vector>
+#include <numeric>
+
+long long square_sum(const std::vector<long long>& nums, int start, int end) {
+    long long sum = 0;
+    for (int i = start; i < end; ++i) {
+        sum += nums[i] * nums[i];
+    }
+    return sum;
+}
+
+int main() {
+    int n;
+    std::cin >> n;
+    std::vector<long long> nums(n);
+    for (auto& x : nums) std::cin >> x;
+
+    int mid = n / 2;
+    auto future1 = std::async(std::launch::async, square_sum, std::cref(nums), 0, mid);
+    auto future2 = std::async(std::launch::async, square_sum, std::cref(nums), mid, n);
+
+    long long result = future1.get() + future2.get();
+    std::cout << result << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -2616,7 +3165,82 @@ int main() {
         'std::atomic<int> 用於安全地累加總和',
         '生產者完成後呼叫 close()',
         '消費者從 queue pop 直到 queue 關閉'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <vector>
+#include <atomic>
+
+template<typename T>
+class MessageQueue {
+    std::queue<T> queue_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+public:
+    void push(T value) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            queue_.push(std::move(value));
+        }
+        cv_.notify_one();
+    }
+
+    bool pop(T& value) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return !queue_.empty() || done_; });
+        if (queue_.empty()) return false;
+        value = std::move(queue_.front());
+        queue_.pop();
+        return true;
+    }
+
+    void close() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            done_ = true;
+        }
+        cv_.notify_all();
+    }
+};
+
+int main() {
+    MessageQueue<int> mq;
+    std::atomic<int> total{0};
+    std::atomic<int> producers_done{0};
+
+    std::vector<std::thread> threads;
+
+    // 2 producers
+    for (int p = 0; p < 2; ++p) {
+        threads.emplace_back([&mq, &producers_done, p]() {
+            for (int i = 1; i <= 5; ++i) {
+                mq.push(p * 5 + i);
+            }
+            if (++producers_done == 2) {
+                mq.close();
+            }
+        });
+    }
+
+    // 2 consumers
+    for (int c = 0; c < 2; ++c) {
+        threads.emplace_back([&mq, &total]() {
+            int value;
+            while (mq.pop(value)) {
+                total.fetch_add(value);
+            }
+        });
+    }
+
+    for (auto& t : threads) t.join();
+
+    std::cout << total.load() << std::endl;
+    return 0;
+}`
     }
   },
 
@@ -2817,7 +3441,37 @@ int main() {
         'std::function<std::string(const std::string&)> 作為策略型別',
         'NoCompression lambda: [](const std::string& s) { return s; }',
         'RLE lambda: [](const std::string& s) { return "RLE(" + s + ")"; }'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <functional>
+#include <string>
+
+class Compressor {
+    std::function<std::string(const std::string&)> strategy_;
+public:
+    void setStrategy(std::function<std::string(const std::string&)> strategy) {
+        strategy_ = std::move(strategy);
+    }
+    std::string compress(const std::string& data) const {
+        return strategy_(data);
+    }
+};
+
+int main() {
+    Compressor c;
+    std::string data = "HelloWorld";
+
+    c.setStrategy([](const std::string& s) { return s; });
+    std::cout << c.compress(data) << std::endl;
+
+    c.setStrategy([](const std::string& s) { return "RLE(" + s + ")"; });
+    std::cout << c.compress(data) << std::endl;
+
+    c.setStrategy([](const std::string& s) { return "ZIP(" + s + ")"; });
+    std::cout << c.compress(data) << std::endl;
+
+    return 0;
+}`
     }
   },
   {
@@ -3036,7 +3690,48 @@ int main() {
         '用 std::variant<InfoEvent, WarningEvent, ErrorEvent> 定義 LogEvent',
         '用 overloaded + std::visit 對每種型別寫不同的格式化邏輯',
         'ErrorEvent 需要三個欄位：msg, code, stackTrace'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <variant>
+#include <string>
+#include <vector>
+
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+struct InfoEvent { std::string msg; };
+struct WarningEvent { std::string msg; int code; };
+struct ErrorEvent { std::string msg; int code; std::string stackTrace; };
+
+using LogEvent = std::variant<InfoEvent, WarningEvent, ErrorEvent>;
+
+std::string format(const LogEvent& event) {
+    return std::visit(overloaded{
+        [](const InfoEvent& e) {
+            return "[INFO] " + e.msg;
+        },
+        [](const WarningEvent& e) {
+            return "[WARN-" + std::to_string(e.code) + "] " + e.msg;
+        },
+        [](const ErrorEvent& e) {
+            return "[ERROR-" + std::to_string(e.code) + "] " + e.msg + " | " + e.stackTrace;
+        }
+    }, event);
+}
+
+int main() {
+    std::vector<LogEvent> events = {
+        InfoEvent{"Server started"},
+        WarningEvent{"Deprecated API call", 301},
+        ErrorEvent{"Null pointer", 500, "main.cpp:42"}
+    };
+
+    for (const auto& event : events) {
+        std::cout << format(event) << std::endl;
+    }
+
+    return 0;
+}`
     }
   },
   {
@@ -3289,7 +3984,47 @@ int main() {
         'template<typename Derived> class Serializable',
         'serialize() 呼叫 static_cast<const Derived*>(this)->to_json_impl()',
         '用 std::to_string 將數字轉字串'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <string>
+
+template<typename Derived>
+class Serializable {
+public:
+    std::string serialize() const {
+        return static_cast<const Derived*>(this)->to_json_impl();
+    }
+};
+
+class User : public Serializable<User> {
+    std::string name_;
+    int age_;
+public:
+    User(const std::string& name, int age) : name_(name), age_(age) {}
+    std::string to_json_impl() const {
+        return "{\\\"name\\\":\\\"" + name_ + "\\\",\\\"age\\\":" + std::to_string(age_) + "}";
+    }
+};
+
+class Product : public Serializable<Product> {
+    std::string title_;
+    int price_;
+public:
+    Product(const std::string& title, int price) : title_(title), price_(price) {}
+    std::string to_json_impl() const {
+        return "{\\\"title\\\":\\\"" + title_ + "\\\",\\\"price\\\":" + std::to_string(price_) + "}";
+    }
+};
+
+int main() {
+    User u("Alice", 30);
+    Product p("Laptop", 999);
+
+    std::cout << u.serialize() << std::endl;
+    std::cout << p.serialize() << std::endl;
+
+    return 0;
+}`
     }
   },
 
@@ -3492,7 +4227,93 @@ int main() {
         '區間劃分: chunk = n / 4',
         '四個任務: [1, chunk], [chunk+1, 2*chunk], ...',
         '用 future.get() 取得各區間結果後加總'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <vector>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+#include <future>
+
+class ThreadPool {
+    std::vector<std::thread> workers_;
+    std::queue<std::function<void()>> tasks_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+public:
+    ThreadPool(size_t numThreads) {
+        for (size_t i = 0; i < numThreads; ++i) {
+            workers_.emplace_back([this]() {
+                while (true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        cv_.wait(lock, [this]{ return stop_ || !tasks_.empty(); });
+                        if (stop_ && tasks_.empty()) return;
+                        task = std::move(tasks_.front());
+                        tasks_.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+    ~ThreadPool() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        for (auto& w : workers_) w.join();
+    }
+
+    template<typename F, typename... Args>
+    auto submit(F&& f, Args&&... args) -> std::future<decltype(f(args...))> {
+        using ReturnType = decltype(f(args...));
+        auto task = std::make_shared<std::packaged_task<ReturnType()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+        );
+        std::future<ReturnType> result = task->get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            tasks_.emplace([task]() { (*task)(); });
+        }
+        cv_.notify_one();
+        return result;
+    }
+};
+
+long long range_sum(long long start, long long end) {
+    long long sum = 0;
+    for (long long i = start; i <= end; ++i) sum += i;
+    return sum;
+}
+
+int main() {
+    long long n;
+    std::cin >> n;
+
+    ThreadPool pool(4);
+    std::vector<std::future<long long>> futures;
+
+    long long chunk = n / 4;
+    for (int i = 0; i < 4; ++i) {
+        long long start = i * chunk + 1;
+        long long end = (i == 3) ? n : (i + 1) * chunk;
+        futures.push_back(pool.submit(range_sum, start, end));
+    }
+
+    long long total = 0;
+    for (auto& f : futures) {
+        total += f.get();
+    }
+
+    std::cout << total << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -3754,7 +4575,54 @@ int main() {
         'CAS loop: int old = min_.load(); while (value < old && !min_.compare_exchange_weak(old, value));',
         'compare_exchange_weak 失敗時會自動更新 old 為當前值',
         'max_ 的邏輯類似但方向相反'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <climits>
+
+class AtomicStats {
+    std::atomic<long long> sum_{0};
+    std::atomic<int> count_{0};
+    std::atomic<int> min_{INT_MAX};
+    std::atomic<int> max_{INT_MIN};
+public:
+    void record(int value) {
+        sum_.fetch_add(value);
+        count_.fetch_add(1);
+
+        int old = min_.load();
+        while (value < old && !min_.compare_exchange_weak(old, value));
+
+        old = max_.load();
+        while (value > old && !max_.compare_exchange_weak(old, value));
+    }
+
+    void print() const {
+        std::cout << "Count: " << count_.load() << std::endl;
+        std::cout << "Sum: " << sum_.load() << std::endl;
+        std::cout << "Min: " << min_.load() << std::endl;
+        std::cout << "Max: " << max_.load() << std::endl;
+    }
+};
+
+int main() {
+    AtomicStats stats;
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([&stats, t]() {
+            for (int i = 1; i <= 25; ++i) {
+                stats.record(t * 25 + i);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+
+    stats.print();
+    return 0;
+}`
     }
   },
   {
@@ -4011,7 +4879,62 @@ int main() {
         'squares: for (int i = 1; ; ++i) co_yield i * i;',
         'take: 迴圈 n 次，每次 gen.next() 後 co_yield gen.value()',
         '無限生成器 + take 組合是協程的經典用法'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <coroutine>
+
+template<typename T>
+class Generator {
+public:
+    struct promise_type {
+        T current_value;
+        Generator get_return_object() {
+            return Generator{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        std::suspend_always yield_value(T value) {
+            current_value = std::move(value);
+            return {};
+        }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+
+    using Handle = std::coroutine_handle<promise_type>;
+    explicit Generator(Handle h) : handle_(h) {}
+    ~Generator() { if (handle_) handle_.destroy(); }
+    Generator(const Generator&) = delete;
+    Generator(Generator&& o) noexcept : handle_(o.handle_) { o.handle_ = nullptr; }
+    bool next() { if (!handle_ || handle_.done()) return false; handle_.resume(); return !handle_.done(); }
+    T value() const { return handle_.promise().current_value; }
+private:
+    Handle handle_;
+};
+
+Generator<int> squares() {
+    for (int i = 1; ; ++i) {
+        co_yield i * i;
+    }
+}
+
+Generator<int> take(Generator<int> gen, int n) {
+    for (int i = 0; i < n && gen.next(); ++i) {
+        co_yield gen.value();
+    }
+}
+
+int main() {
+    auto result = take(squares(), 5);
+    bool first = true;
+    while (result.next()) {
+        if (!first) std::cout << " ";
+        std::cout << result.value();
+        first = false;
+    }
+    std::cout << std::endl;
+    return 0;
+}`
     }
   },
   {
@@ -4260,7 +5183,49 @@ int main() {
         'allocate: 檢查 offset_ + bytes <= capacity_',
         '回傳 buffer_ + offset_ 並更新 offset_ += bytes',
         'reset: offset_ = 0'
-      ]
+      ],
+      solution: `#include <iostream>
+#include <cstddef>
+#include <new>
+
+class StackAllocator {
+    unsigned char* buffer_;
+    size_t capacity_;
+    size_t offset_ = 0;
+public:
+    StackAllocator(size_t capacity)
+        : buffer_(new unsigned char[capacity]), capacity_(capacity) {}
+    ~StackAllocator() { delete[] buffer_; }
+
+    void* allocate(size_t bytes) {
+        if (offset_ + bytes > capacity_) return nullptr;
+        void* ptr = buffer_ + offset_;
+        offset_ += bytes;
+        return ptr;
+    }
+
+    void reset() { offset_ = 0; }
+
+    size_t used() const { return offset_; }
+    size_t capacity() const { return capacity_; }
+};
+
+int main() {
+    StackAllocator alloc(256);
+
+    int* a = static_cast<int*>(alloc.allocate(sizeof(int)));
+    int* b = static_cast<int*>(alloc.allocate(sizeof(int)));
+    int* c = static_cast<int*>(alloc.allocate(sizeof(int)));
+
+    *a = 10; *b = 20; *c = 30;
+    std::cout << *a << " " << *b << " " << *c << std::endl;
+    std::cout << "Used: " << alloc.used() << std::endl;
+
+    alloc.reset();
+    std::cout << "After reset: " << alloc.used() << std::endl;
+
+    return 0;
+}`
     }
   },
 ];
