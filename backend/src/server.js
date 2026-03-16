@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { execFile } from 'child_process';
-import { writeFile, unlink } from 'fs/promises';
+import { writeFile, unlink, chmod } from 'fs/promises';
 import crypto from 'crypto';
 import path from 'path';
 
@@ -63,6 +63,9 @@ app.post('/api/compile', async (req, res) => {
         compilationError: compilationResult.stderr,
       });
     }
+
+    // Ensure execute permission (macOS Docker tmpfs may lack exec flag)
+    await chmod(outPath, 0o755);
 
     // Execute
     const executionResult = await new Promise((resolve) => {

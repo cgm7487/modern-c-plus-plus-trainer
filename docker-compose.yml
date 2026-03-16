@@ -21,4 +21,4 @@ services:
     volumes:
       - ./backend/src:/app/src
     tmpfs:
-      - /tmp
+      - /tmp:exec
