@@ -4,14 +4,21 @@ import { execFile } from 'child_process';
 import { writeFile, unlink, chmod } from 'fs/promises';
 import crypto from 'crypto';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const MAX_CODE_SIZE = 50 * 1024; // 50KB
 const EXECUTION_TIMEOUT = 5000; // 5 seconds
 
 app.use(cors());
 app.use(express.json({ limit: '100kb' }));
+
+// Serve frontend static files in production
+const publicPath = path.join(__dirname, '..', 'public');
+app.use(express.static(publicPath));
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -106,6 +113,11 @@ app.post('/api/compile', async (req, res) => {
       compilationError: null,
     });
   }
+});
+
+// SPA fallback: serve index.html for non-API routes
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(publicPath, 'index.html'));
 });
 
 // Error handling middleware
