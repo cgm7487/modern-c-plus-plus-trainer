@@ -62,17 +62,122 @@ decltype(x + 1.0) z = 3.14; // double
 - \`auto\` 會忽略頂層 const 和引用
 - \`decltype\` 完整保留表達式的型別
 
+## 尾端回傳型別 (Trailing Return Type)
+
+C++11 引入了尾端回傳型別語法，搭配 \`auto\` 和 \`decltype\` 使用：
+
+\`\`\`cpp
+// 傳統寫法無法在回傳型別處引用參數
+// 尾端回傳型別解決此問題
+template<typename T, typename U>
+auto add(T a, U b) -> decltype(a + b) {
+    return a + b;
+}
+\`\`\`
+
+C++14 之後編譯器可自動推導回傳型別，很多情況可省略尾端回傳型別：
+
+\`\`\`cpp
+// C++14: 自動推導回傳型別
+template<typename T, typename U>
+auto add(T a, U b) {
+    return a + b;
+}
+\`\`\`
+
+但尾端回傳型別在需要 SFINAE 或明確表達意圖時仍然有用。
+
+## decltype(auto) — C++14
+
+\`decltype(auto)\` 結合了 \`auto\` 的便利和 \`decltype\` 的精確型別保留：
+
+\`\`\`cpp
+int x = 42;
+int& rx = x;
+
+auto a = rx;            // int（auto 去掉引用）
+decltype(auto) b = rx;  // int&（保留引用！）
+
+// 最常用於完美轉發回傳值
+template<typename F, typename... Args>
+decltype(auto) wrapper(F&& f, Args&&... args) {
+    return std::forward<F>(f)(std::forward<Args>(args)...);
+}
+\`\`\`
+
+**注意**：\`decltype(auto)\` 對括號非常敏感！
+
+\`\`\`cpp
+int x = 42;
+decltype(auto) a = x;    // int
+decltype(auto) b = (x);  // int& ← 加括號變成引用，非常危險！
+\`\`\`
+
+## auto 用於函式參數 (C++20)
+
+C++20 允許在普通函式中使用 \`auto\` 作為參數型別，等同於隱式模板：
+
+\`\`\`cpp
+// C++20: abbreviated function template
+void print(const auto& value) {
+    std::cout << value << std::endl;
+}
+// 等價於：
+// template<typename T>
+// void print(const T& value) { ... }
+
+// 多個 auto 參數各自獨立推導
+auto add(auto a, auto b) {
+    return a + b;
+}
+// 等價於 template<typename T, typename U> auto add(T a, U b)
+\`\`\`
+
+## 何時**不該**使用 auto
+
+雖然 \`auto\` 很方便，但以下情況應避免使用：
+
+1. **型別不明顯時** — 降低可讀性：
+\`\`\`cpp
+auto result = compute();  // result 是什麼型別？不清楚
+int result = compute();   // 明確知道是 int
+\`\`\`
+
+2. **需要特定型別轉換時**：
+\`\`\`cpp
+auto size = vec.size();  // size_t（無號整數）
+int size = vec.size();   // 如果需要有號整數
+\`\`\`
+
+3. **代理物件 (proxy objects)**：
+\`\`\`cpp
+std::vector<bool> flags = {true, false, true};
+auto val = flags[0];    // 不是 bool！是 vector<bool>::reference
+bool val = flags[0];    // 才是真正的 bool
+\`\`\`
+
+4. **初始化列表的型別歧義**：
+\`\`\`cpp
+auto x = {1, 2, 3};  // std::initializer_list<int>，不是 vector！
+auto y = {1};         // C++11/14: initializer_list<int>
+auto z{1};            // C++17 起才是 int
+\`\`\`
+
 ## 常見陷阱
 
 - 不要對未初始化的變數使用 \`auto\`
 - \`auto\` 會拷貝物件，需要引用時記得加 \`&\`
 - \`decltype((x))\` 與 \`decltype(x)\` 結果不同（加括號會變成引用）
+- \`auto\` 搭配大括號初始化行為在不同標準版本有差異
 
 ## Best Practice
 
 - 當型別明顯時使用 \`auto\` 提高可讀性
 - 複雜的模板型別優先使用 \`auto\`
 - 需要精確型別控制時使用 \`decltype\`
+- 需要保留引用和 cv 限定符時考慮 \`decltype(auto)\`
+- 避免對 \`vector<bool>\` 的元素使用 \`auto\`
+- C++20 中善用 \`auto\` 參數簡化模板函式
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -200,6 +305,118 @@ for (const auto& val : vec) { ... }
 for (auto& val : vec) { val *= 2; }
 \`\`\`
 
+## 內部運作原理：begin() / end()
+
+Range-based for 迴圈實際上是語法糖。編譯器會將它展開為：
+
+\`\`\`cpp
+// for (auto& elem : container) { body; }
+// 等價於：
+{
+    auto&& __range = container;
+    auto __begin = std::begin(__range);
+    auto __end = std::end(__range);
+    for (; __begin != __end; ++__begin) {
+        auto& elem = *__begin;
+        body;
+    }
+}
+\`\`\`
+
+理解這個展開很重要，因為：
+- **不能在迴圈中修改容器大小**（會導致迭代器失效）
+- 容器需要提供 \\\`begin()\\\` 和 \\\`end()\\\`
+- expression 只會被求值一次
+
+## 讓自定義類別支援 Range-based for
+
+你的類別只需提供 \\\`begin()\\\` 和 \\\`end()\\\` 方法：
+
+\`\`\`cpp
+class IntRange {
+    int start_, end_;
+public:
+    IntRange(int s, int e) : start_(s), end_(e) {}
+
+    struct Iterator {
+        int current;
+        int operator*() const { return current; }
+        Iterator& operator++() { ++current; return *this; }
+        bool operator!=(const Iterator& o) const {
+            return current != o.current;
+        }
+    };
+
+    Iterator begin() const { return {start_}; }
+    Iterator end() const { return {end_}; }
+};
+
+// 使用：
+for (int i : IntRange(1, 5)) {
+    std::cout << i << " "; // 1 2 3 4
+}
+\`\`\`
+
+也可以用自由函式的方式：
+
+\`\`\`cpp
+auto begin(MyContainer& c) { return c.first(); }
+auto end(MyContainer& c) { return c.last(); }
+\`\`\`
+
+## C++20 init-statement（初始化語句）
+
+C++20 允許在 range-based for 中加入初始化語句：
+
+\`\`\`cpp
+// C++20: for (init; decl : expr)
+for (auto vec = getVector(); const auto& elem : vec) {
+    std::cout << elem << " ";
+}
+
+// 實用：在迴圈中追蹤索引
+for (int i = 0; const auto& elem : container) {
+    std::cout << i++ << ": " << elem << "\\n";
+}
+
+// 搭配結構化綁定
+for (auto m = getMap(); const auto& [key, val] : m) {
+    std::cout << key << " = " << val << "\\n";
+}
+\`\`\`
+
+## 效能注意事項
+
+1. **避免不必要的拷貝**：
+\`\`\`cpp
+// 壞：每次迭代都拷貝 string
+for (auto s : vecOfStrings) { ... }
+// 好：使用 const 引用
+for (const auto& s : vecOfStrings) { ... }
+\`\`\`
+
+2. **小心臨時物件的生命週期**：
+\`\`\`cpp
+// 安全：臨時物件生命週期延長到迴圈結束
+for (auto& x : getVector()) { ... }
+
+// 危險！鏈式呼叫可能產生懸空引用
+// for (auto& x : getObj().getVec()) { ... }
+// getObj() 的臨時物件在迴圈前可能已銷毀！
+\`\`\`
+
+3. **對 map 使用結構化綁定**（C++17）更清晰：
+\`\`\`cpp
+// C++11
+for (const auto& p : myMap) {
+    std::cout << p.first << ": " << p.second;
+}
+// C++17（更易讀）
+for (const auto& [key, value] : myMap) {
+    std::cout << key << ": " << value;
+}
+\`\`\`
+
 ## 適用範圍
 
 - STL 容器（vector, list, map, set...）
@@ -209,9 +426,12 @@ for (auto& val : vec) { val *= 2; }
 
 ## Best Practice
 
-- 唯讀遍歷用 \`const auto&\`
-- 需要修改元素用 \`auto&\`
+- 唯讀遍歷用 \\\`const auto&\\\`
+- 需要修改元素用 \\\`auto&\\\`
 - 避免用值拷貝（除非型別很小如 int）
+- 不要在迴圈中增刪容器元素
+- 小心鏈式呼叫產生的臨時物件懸空引用
+- C++20 中利用 init-statement 限制變數作用域
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -333,41 +553,172 @@ int main() {
 
 ## 捕獲列表 (Capture)
 
-- \`[]\` - 不捕獲任何變數
-- \`[=]\` - 以值捕獲所有變數
-- \`[&]\` - 以引用捕獲所有變數
-- \`[x]\` - 以值捕獲 x
-- \`[&x]\` - 以引用捕獲 x
-- \`[=, &x]\` - 全部以值捕獲，x 以引用捕獲
-- \`[this]\` - 捕獲 this 指標
+- \\\`[]\\\` - 不捕獲任何變數
+- \\\`[=]\\\` - 以值捕獲所有變數
+- \\\`[&]\\\` - 以引用捕獲所有變數
+- \\\`[x]\\\` - 以值捕獲 x
+- \\\`[&x]\\\` - 以引用捕獲 x
+- \\\`[=, &x]\\\` - 全部以值捕獲，x 以引用捕獲
+- \\\`[this]\\\` - 捕獲 this 指標
+- \\\`[*this]\\\` - C++17，以值捕獲整個物件（拷貝）
+
+### 值捕獲 vs 引用捕獲的細節
+
+**值捕獲**在 lambda 建立時拷貝值，之後外部變數的變化不影響 lambda：
+
+\`\`\`cpp
+int x = 10;
+auto f = [x]() { return x; }; // 拷貝 x=10
+x = 20;
+f(); // 仍然回傳 10
+\`\`\`
+
+**引用捕獲**持有外部變數的引用，始終反映最新值：
+
+\`\`\`cpp
+int x = 10;
+auto f = [&x]() { return x; }; // 引用 x
+x = 20;
+f(); // 回傳 20
+\`\`\`
+
+**生命週期陷阱**：引用捕獲最大的風險是懸空引用：
+
+\`\`\`cpp
+std::function<int()> makeLambda() {
+    int local = 42;
+    return [&local]() { return local; }; // 危險！
+    // local 在函式結束後銷毀，lambda 持有懸空引用
+}
+\`\`\`
+
+## mutable Lambda
+
+以值捕獲的變數預設是 const，不能修改。加上 \\\`mutable\\\` 可以修改：
+
+\`\`\`cpp
+int count = 0;
+auto counter = [count]() mutable {
+    return ++count; // 修改的是 lambda 內部的拷貝
+};
+counter(); // 1
+counter(); // 2
+// 外部的 count 仍然是 0
+\`\`\`
 
 ## 搭配 STL 演算法
 
 Lambda 最常用於 STL 演算法中：
 
 \`\`\`cpp
-std::sort(vec.begin(), vec.end(), 
+std::sort(vec.begin(), vec.end(),
     [](int a, int b) { return a > b; }); // 降序排列
 \`\`\`
 
-## C++14: 泛型 Lambda
+## C++14: 泛型 Lambda (Generic Lambda)
 
 \`\`\`cpp
+// C++14: auto 參數
 auto print = [](const auto& x) { std::cout << x; };
+print(42);       // int
+print("hello");  // const char*
+print(3.14);     // double
 \`\`\`
 
-## C++14: init capture
+## C++20: 模板 Lambda
+
+C++20 允許 lambda 擁有顯式模板參數：
+
+\`\`\`cpp
+// C++20: 顯式模板參數
+auto toVector = []<typename T>(const T& container) {
+    return std::vector(container.begin(), container.end());
+};
+
+// 可以加 concept 約束
+auto add = []<typename T>(T a, T b) requires std::integral<T> {
+    return a + b;
+};
+\`\`\`
+
+## C++14: init capture（初始化捕獲）
 
 \`\`\`cpp
 auto ptr = std::make_unique<int>(42);
 auto lambda = [p = std::move(ptr)]() { return *p; };
+// 可以用來移動不可拷貝的物件進 lambda
+\`\`\`
+
+## Lambda 作為回呼 (Callback) 與 std::function
+
+Lambda 天生適合作為回呼函式：
+
+\`\`\`cpp
+// 直接用模板接受 lambda（零成本）
+template<typename Callback>
+void process(int data, Callback cb) {
+    cb(data * 2);
+}
+
+// 用 std::function（有額外開銷）
+void process(int data, std::function<void(int)> cb) {
+    cb(data * 2);
+}
+\`\`\`
+
+**std::function 的開銷**：
+- 可能觸發堆積記憶體配置（小物件最佳化除外）
+- 透過虛函式呼叫，無法內聯
+- 大小固定（通常 32-64 bytes）
+- 當 lambda 不需要型別擦除時，優先用模板或 \\\`auto\\\`
+
+## 立即呼叫的 Lambda (IIFE)
+
+Lambda 可以定義後立即呼叫，用於複雜的初始化：
+
+\`\`\`cpp
+// 用 IIFE 初始化 const 變數
+const auto config = [&]() {
+    Config c;
+    c.width = loadWidth();
+    c.height = loadHeight();
+    c.fullscreen = checkFullscreen();
+    return c;
+}(); // 注意結尾的 ()！
+
+// 替代多行條件初始化
+const auto value = [&]() -> int {
+    if (condition1) return computeA();
+    if (condition2) return computeB();
+    return defaultValue;
+}();
+\`\`\`
+
+## 遞迴 Lambda
+
+Lambda 無法直接遞迴呼叫自身（因為 \\\`auto\\\` 尚未完成推導）。解法：
+
+\`\`\`cpp
+// 方法一：使用 std::function（有開銷）
+std::function<int(int)> factorial = [&](int n) -> int {
+    return n <= 1 ? 1 : n * factorial(n - 1);
+};
+
+// 方法二：傳遞自身作為參數（零成本）
+auto factorial = [](auto self, int n) -> int {
+    return n <= 1 ? 1 : n * self(self, n - 1);
+};
+factorial(factorial, 5); // 120
 \`\`\`
 
 ## Best Practice
 
 - 短小的回呼函式用 lambda
 - 需要重複使用的邏輯抽成具名函式
-- 預設以 \`[&]\` 捕獲時要注意生命週期
+- 預設以 \\\`[&]\\\` 捕獲時要注意生命週期
+- 避免不必要地使用 \\\`std::function\\\`，優先用模板或 \\\`auto\\\`
+- 用 IIFE 進行複雜的 const 變數初始化
+- Lambda 超過 3-5 行時考慮提取成具名函式
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -501,13 +852,23 @@ int main() {
 - 重複 delete 導致未定義行為
 - 異常安全問題
 
+## 所有權語意 (Ownership Semantics)
+
+C++ 的資源管理核心概念是**所有權**：
+- **獨佔所有權**：同一時間只有一個擁有者 → \\\`unique_ptr\\\`
+- **共享所有權**：多個擁有者，最後一個銷毀時釋放 → \\\`shared_ptr\\\`
+- **觀察者**：不擁有資源，只是觀察 → \\\`weak_ptr\\\` 或裸指標
+
+選擇智慧指標的原則：先考慮 \\\`unique_ptr\\\`，只在真正需要共享時才用 \\\`shared_ptr\\\`。
+
 ## std::unique_ptr
 
 **獨佔所有權**的智慧指標，不可複製但可移動：
 
 \`\`\`cpp
 auto ptr = std::make_unique<int>(42);
-auto ptr2 = std::move(ptr); // 所有權轉移
+// auto ptr2 = ptr;           // 編譯錯誤！不可複製
+auto ptr2 = std::move(ptr);   // 所有權轉移，ptr 變成 nullptr
 \`\`\`
 
 ## std::shared_ptr
@@ -519,21 +880,128 @@ auto sp1 = std::make_shared<int>(42);
 auto sp2 = sp1; // 引用計數 +1
 \`\`\`
 
-## std::weak_ptr
+### 循環引用問題
 
-不增加引用計數，解決 shared_ptr 的循環引用問題：
+\\\`shared_ptr\\\` 最大的陷阱是循環引用，會導致記憶體洩漏：
 
 \`\`\`cpp
+struct Node {
+    std::shared_ptr<Node> next;
+    // 如果兩個 Node 互相指向對方：
+    // A->next = B, B->next = A
+    // 引用計數永遠不會降到 0！
+};
+\`\`\`
+
+## std::weak_ptr
+
+不增加引用計數，解決循環引用問題：
+
+\`\`\`cpp
+struct Node {
+    std::shared_ptr<Node> next;
+    std::weak_ptr<Node> prev;  // 用 weak_ptr 打破循環！
+};
+
+// 使用 weak_ptr
 std::weak_ptr<int> wp = sp1;
-if (auto locked = wp.lock()) { /* 使用 locked */ }
+if (auto locked = wp.lock()) {
+    // locked 是 shared_ptr，物件仍然存活
+    std::cout << *locked << std::endl;
+} else {
+    // 物件已被銷毀
+}
+\`\`\`
+
+\\\`weak_ptr\\\` 的典型用途：
+- **打破循環引用**（如雙向連結、樹的父子關係）
+- **快取**（觀察物件是否仍存在）
+- **觀察者模式**（不延長被觀察者的生命週期）
+
+## 自定義刪除器 (Custom Deleter)
+
+智慧指標可以使用自定義的清理邏輯：
+
+\`\`\`cpp
+// unique_ptr 自定義刪除器（影響型別）
+auto fileDeleter = [](FILE* f) { fclose(f); };
+std::unique_ptr<FILE, decltype(fileDeleter)>
+    file(fopen("data.txt", "r"), fileDeleter);
+
+// shared_ptr 自定義刪除器（不影響型別）
+std::shared_ptr<FILE> file2(
+    fopen("data.txt", "r"),
+    [](FILE* f) { fclose(f); }
+);
+
+// 管理 C 風格 API 的資源
+std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>
+    window(SDL_CreateWindow(...), SDL_DestroyWindow);
+\`\`\`
+
+## make_unique / make_shared 的優勢
+
+為什麼要用 \\\`make_unique\\\` 和 \\\`make_shared\\\` 而非直接 \\\`new\\\`？
+
+\`\`\`cpp
+// 1. 異常安全
+// 危險：如果 g() 拋出異常，new Widget 可能洩漏
+f(std::shared_ptr<Widget>(new Widget), g());
+
+// 安全：make_shared 是單一操作
+f(std::make_shared<Widget>(), g());
+
+// 2. make_shared 只配置一次記憶體
+auto sp = std::make_shared<int>(42);
+// 將控制區塊和物件放在同一塊記憶體中
+
+// 3. 更簡潔，不需重複型別名稱
+auto ptr = std::make_unique<MyLongClassName>(args);
+\`\`\`
+
+## 別名建構子 (Aliasing Constructor)
+
+\\\`shared_ptr\\\` 的別名建構子讓你共享所有權但指向不同的物件：
+
+\`\`\`cpp
+struct Composite {
+    int data;
+    std::string name;
+};
+
+auto composite = std::make_shared<Composite>();
+// 指向 composite->data，但共享 composite 的所有權
+std::shared_ptr<int> dataPtr(composite, &composite->data);
+// composite 至少在 dataPtr 存活期間不會被銷毀
+\`\`\`
+
+## enable_shared_from_this
+
+當物件需要取得指向自身的 \\\`shared_ptr\\\` 時使用：
+
+\`\`\`cpp
+class Widget : public std::enable_shared_from_this<Widget> {
+public:
+    std::shared_ptr<Widget> getPtr() {
+        return shared_from_this(); // 安全取得 shared_ptr
+        // 不能用 shared_ptr<Widget>(this)，會產生兩個控制區塊！
+    }
+};
+
+// 注意：物件必須已經被 shared_ptr 管理
+auto w = std::make_shared<Widget>();
+auto w2 = w->getPtr(); // OK
 \`\`\`
 
 ## Best Practice
 
-- 優先使用 \`make_unique\` 和 \`make_shared\`
-- 預設使用 \`unique_ptr\`，需要共享時才用 \`shared_ptr\`
+- 優先使用 \\\`make_unique\\\` 和 \\\`make_shared\\\`
+- 預設使用 \\\`unique_ptr\\\`，需要共享時才用 \\\`shared_ptr\\\`
 - 函式參數傳遞：用 raw pointer 或 reference（不轉移所有權時）
-- 永遠不要用 \`new\`/\`delete\`
+- 永遠不要用 \\\`new\\\`/\\\`delete\\\`
+- 用 \\\`weak_ptr\\\` 打破循環引用
+- 需要從 \\\`this\\\` 取得 \\\`shared_ptr\\\` 時繼承 \\\`enable_shared_from_this\\\`
+- 自定義刪除器讓智慧指標可以管理任何資源
 `,
     codeExample: `#include <iostream>
 #include <memory>
@@ -666,10 +1134,25 @@ int main() {
     difficulty: 'advanced',
     content: `# 移動語意與右值參考
 
-## 左值 vs 右值
+## 左值 vs 右值 — 詳細解析
 
-- **左值 (lvalue)**：有名稱、可取址的表達式，如變數
-- **右值 (rvalue)**：臨時值、字面量，即將被銷毀的物件
+每個 C++ 表達式都有**值類別 (value category)**：
+
+- **左值 (lvalue)**：有名稱、可取址的表達式
+  - 變數名稱、字串字面量 \\\`"hello"\\\`、回傳引用的函式呼叫
+- **純右值 (prvalue)**：臨時值、數值字面量
+  - \\\`42\\\`、\\\`std::string("temp")\\\`、回傳非引用型別的函式呼叫
+- **將亡值 (xvalue)**：即將被移動的物件
+  - \\\`std::move(x)\\\` 的結果
+
+\`\`\`cpp
+int x = 42;
+int& ref = x;           // OK: 左值引用綁定左值
+int&& rref = 42;        // OK: 右值引用綁定純右值
+int&& rref2 = std::move(x); // OK: 將亡值
+\`\`\`
+
+**重要**：右值引用變數本身是左值（有名稱）。
 
 ## 右值參考 (&&)
 
@@ -678,25 +1161,50 @@ int&& rref = 42;          // 右值參考
 std::string&& s = "temp"; // 綁定到臨時值
 \`\`\`
 
-## 移動建構與移動賦值
+## 移動建構與移動賦值 — 詳解
+
+移動操作「偷取」資源而非拷貝：
 
 \`\`\`cpp
-class MyClass {
-    MyClass(MyClass&& other) noexcept;            // 移動建構
-    MyClass& operator=(MyClass&& other) noexcept; // 移動賦值
+class MyString {
+    char* data_;
+    size_t size_;
+public:
+    MyString(MyString&& other) noexcept
+        : data_(other.data_), size_(other.size_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+    }
+
+    MyString& operator=(MyString&& other) noexcept {
+        if (this != &other) {
+            delete[] data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+        }
+        return *this;
+    }
 };
 \`\`\`
 
-## std::move
+## std::move 不會真正移動！
 
-將左值轉換為右值參考，啟用移動語意：
+\\\`std::move\\\` 只做型別轉換，真正的移動發生在移動建構/賦值中：
 
 \`\`\`cpp
+// std::move 的本質是 static_cast
+template<typename T>
+decltype(auto) move(T&& t) noexcept {
+    return static_cast<std::remove_reference_t<T>&&>(t);
+}
+
 std::string s1 = "hello";
-std::string s2 = std::move(s1); // s1 被「掏空」
+std::string s2 = std::move(s1); // 真正移動在 string 移動建構
 \`\`\`
 
-## Rule of Five
+## Rule of Five（五法則）
 
 如果你定義了以下任一個，通常需要全部定義：
 1. 解構函式
@@ -705,11 +1213,58 @@ std::string s2 = std::move(s1); // s1 被「掏空」
 4. 移動建構
 5. 移動賦值
 
+**Rule of Zero 更好**：用 \\\`vector\\\`、\\\`unique_ptr\\\` 等管理資源，不自定義特殊成員函式。
+
+## noexcept 的重要性
+
+移動操作**一定要標記 noexcept**，否則 STL 容器退化為拷貝：
+
+\`\`\`cpp
+// vector 重新分配時的邏輯：
+// if (移動建構是 noexcept) → 移動（快）
+// else → 拷貝（慢，但安全）
+\`\`\`
+
+## 完美轉發 (Perfect Forwarding) 簡介
+
+用**萬能引用**和 \\\`std::forward\\\` 保持參數的值類別：
+
+\`\`\`cpp
+template<typename T>
+void wrapper(T&& arg) {  // 萬能引用，非右值引用
+    target(std::forward<T>(arg));
+}
+wrapper(42);   // 右值 → 移動
+int x = 42;
+wrapper(x);    // 左值 → 拷貝
+\`\`\`
+
+## RVO / NRVO — 編譯器自動優化
+
+編譯器可省略拷貝/移動，直接在呼叫端建構物件：
+
+\`\`\`cpp
+std::vector<int> createVector() {
+    std::vector<int> v = {1, 2, 3};
+    return v;  // NRVO: 零拷貝零移動
+}
+\`\`\`
+
+**不要對回傳值使用 std::move！** 會阻止 RVO：
+
+\`\`\`cpp
+return std::move(v); // 壞！阻止 NRVO
+return v;            // 好！讓編譯器優化
+\`\`\`
+
 ## Best Practice
 
-- 移動操作標記為 \`noexcept\`
+- 移動操作標記為 \\\`noexcept\\\`
 - 移動後的物件應處於有效但未指定的狀態
 - 不要對 const 物件使用 std::move（無效果）
+- 不要對回傳的局部變數使用 std::move
+- 優先遵循 Rule of Zero
+- std::move 只是 cast，不會真正移動
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -900,19 +1455,23 @@ int main() {
 ## 基本語法
 
 \`\`\`cpp
-template<typename... Args>
-void print(Args... args) { /* ... */ }
+template<typename... Args>  // Args: template parameter pack
+void print(Args... args) {  // args: function parameter pack
+}
 \`\`\`
 
-## Parameter Pack 展開
+\\\`typename... Args\\\` 宣告模板參數包，可匹配零個或多個型別。
 
-C++17 的 fold expression 讓展開更簡潔：
+## sizeof... 運算子
+
+取得參數包中的參數數量（編譯期常數）：
 
 \`\`\`cpp
 template<typename... Args>
-auto sum(Args... args) {
-    return (args + ...); // fold expression
+constexpr size_t count(Args...) {
+    return sizeof...(Args);
 }
+count(1, "hello", 3.14); // 3
 \`\`\`
 
 ## 遞迴展開（C++11 風格）
@@ -922,7 +1481,85 @@ void print() {} // base case
 template<typename T, typename... Rest>
 void print(T first, Rest... rest) {
     std::cout << first << " ";
-    print(rest...);
+    print(rest...); // 遞迴展開剩餘參數
+}
+\`\`\`
+
+## Parameter Pack 展開模式
+
+參數包可以套用模式後展開：
+
+\`\`\`cpp
+template<typename... Args>
+void example(Args... args) {
+    f(args...);       // f(a1, a2, a3)
+    f(g(args)...);    // f(g(a1), g(a2), g(a3))
+    f(&args...);      // f(&a1, &a2, &a3)
+}
+\`\`\`
+
+## Fold Expressions（C++17 折疊表達式）
+
+C++17 大幅簡化參數包的展開：
+
+\`\`\`cpp
+// 一元右折疊: (args op ...)
+template<typename... Args>
+auto sum(Args... args) {
+    return (args + ...); // a1 + (a2 + (a3 + ...))
+}
+
+// 二元折疊（帶初始值）
+template<typename... Args>
+auto sum_safe(Args... args) {
+    return (args + ... + 0); // 空參數包回傳 0
+}
+
+// 逗號折疊 — 對每個參數執行操作
+template<typename... Args>
+void printAll(Args... args) {
+    ((std::cout << args << " "), ...);
+}
+
+// 邏輯折疊
+template<typename... Args>
+bool allPositive(Args... args) {
+    return ((args > 0) && ...);
+}
+\`\`\`
+
+## 可變參數類別模板
+
+\`\`\`cpp
+// 簡化版 tuple 概念
+template<typename... Types>
+struct Tuple {};
+
+template<typename Head, typename... Tail>
+struct Tuple<Head, Tail...> {
+    Head value;
+    Tuple<Tail...> rest;
+};
+
+template<>
+struct Tuple<> {};
+\`\`\`
+
+## 真實世界應用
+
+\`\`\`cpp
+// 1. make_unique 實作原理
+template<typename T, typename... Args>
+std::unique_ptr<T> my_make_unique(Args&&... args) {
+    return std::unique_ptr<T>(
+        new T(std::forward<Args>(args)...)
+    );
+}
+
+// 2. 一次加入多個元素
+template<typename Container, typename... Items>
+void addAll(Container& c, Items&&... items) {
+    (c.push_back(std::forward<Items>(items)), ...);
 }
 \`\`\`
 
@@ -930,7 +1567,8 @@ void print(T first, Rest... rest) {
 
 - 型別安全的 printf
 - std::make_unique / std::make_shared 的實作
-- tuple 的實作
+- tuple、variant 的實作
+- 完美轉發多個參數
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -1042,32 +1680,91 @@ auto [var1, var2, ...] = expression;
 
 ## 適用型別
 
-1. **陣列**：
+### 1. 陣列
 \`\`\`cpp
 int arr[] = {1, 2, 3};
-auto [a, b, c] = arr;
+auto [a, b, c] = arr;  // 綁定數量必須與陣列大小一致
 \`\`\`
 
-2. **pair / tuple**：
+### 2. pair / tuple
 \`\`\`cpp
 auto [key, value] = std::make_pair("name", 42);
+auto [x, y, z] = std::make_tuple(1, 2.0, "three");
 \`\`\`
 
-3. **struct**：
+### 3. struct（所有成員必須是 public）
 \`\`\`cpp
 struct Point { int x, y; };
 auto [x, y] = Point{3, 4};
+// 綁定順序與成員宣告順序一致
 \`\`\`
 
-4. **map 遍歷**：
+### 4. map 遍歷
 \`\`\`cpp
 for (const auto& [key, val] : myMap) { ... }
 \`\`\`
 
+## const 與引用綁定
+
+\`\`\`cpp
+std::pair<int, std::string> p{42, "hello"};
+
+auto [a, b] = p;          // 值綁定（拷貝）
+const auto& [ca, cb] = p; // const 引用（唯讀，無拷貝）
+auto& [ra, rb] = p;       // 引用（可修改原始物件）
+ra = 100;                  // p.first 變成 100
+\`\`\`
+
+## 讓自定義類別支援結構化綁定
+
+非 public 成員的類別需提供 tuple 協定：
+
+\`\`\`cpp
+class MyPoint {
+    double x_, y_;
+public:
+    MyPoint(double x, double y) : x_(x), y_(y) {}
+    double x() const { return x_; }
+    double y() const { return y_; }
+};
+
+// 提供 tuple_size, tuple_element, get
+template<> struct std::tuple_size<MyPoint>
+    : std::integral_constant<size_t, 2> {};
+template<size_t I>
+struct std::tuple_element<I, MyPoint> { using type = double; };
+template<size_t I>
+double get(const MyPoint& p) {
+    if constexpr (I == 0) return p.x();
+    else return p.y();
+}
+
+auto [x, y] = MyPoint(3.0, 4.0); // OK
+\`\`\`
+
+## 搭配 if / switch 初始化語句
+
+C++17 的 if init-statement 與結構化綁定非常搭：
+
+\`\`\`cpp
+// map::insert 回傳 pair<iterator, bool>
+if (auto [it, ok] = myMap.insert({key, val}); ok) {
+    std::cout << "插入成功" << std::endl;
+}
+
+// map::find
+if (auto it = scores.find("Alice"); it != scores.end()) {
+    auto& [name, score] = *it;
+    score += 5; // 直接修改
+}
+\`\`\`
+
 ## Best Practice
 
-- 搭配 const auto& 避免不必要的拷貝
+- 搭配 \\\`const auto&\\\` 避免不必要的拷貝
 - 變數名稱要有意義
+- 搭配 if init-statement 限制變數作用域
+- 綁定數量必須與成員/元素數量完全匹配
 `,
     codeExample: `#include <iostream>
 #include <map>
@@ -1208,6 +1905,35 @@ std::optional<int> find(const std::vector<int>& v, int target) {
 }
 \`\`\`
 
+### optional 的操作方法
+
+\`\`\`cpp
+std::optional<int> opt = 42;
+
+if (opt) { /* 有值 */ }           // 布林檢查
+int val = *opt;                   // 無檢查取值（無值時 UB）
+int val2 = opt.value();           // 無值時拋出例外
+int val3 = opt.value_or(0);      // 無值時回傳預設值
+opt.emplace(100);                 // 就地建構
+opt.reset();                      // 清除為 nullopt
+\`\`\`
+
+### optional 的 Monadic 操作（C++23）
+
+\`\`\`cpp
+std::optional<int> opt = 42;
+// transform: 有值時轉換
+auto doubled = opt.transform([](int x) { return x * 2; });
+
+// and_then: 有值時回傳另一個 optional
+auto result = opt.and_then([](int x) -> std::optional<int> {
+    return x > 0 ? std::optional(x * 2) : std::nullopt;
+});
+
+// or_else: 無值時的替代操作
+auto fallback = opt.or_else([]() { return std::optional(0); });
+\`\`\`
+
 ## std::variant<Types...>
 
 型別安全的 union，可以持有指定型別之一：
@@ -1219,6 +1945,36 @@ v = "hello"s;
 std::get<std::string>(v); // "hello"
 \`\`\`
 
+### variant vs 繼承多型
+
+- **variant**：編譯期固定型別集合、棧上配置、無虛函式開銷
+- **繼承多型**：可擴展型別、需要指標/堆積、有 vtable 開銷
+- variant 適合已知固定型別集合，繼承適合開放式擴展
+
+### std::visit 與多重 variant
+
+\`\`\`cpp
+// overloaded 輔助工具
+template<class... Ts> struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+std::variant<int, double, std::string> v = "hello"s;
+std::visit(overloaded{
+    [](int i) { std::cout << "int: " << i; },
+    [](double d) { std::cout << "double: " << d; },
+    [](const auto& s) { std::cout << "other: " << s; }
+}, v);
+
+// 同時 visit 多個 variant
+std::variant<int, std::string> v1 = 42;
+std::variant<double, bool> v2 = true;
+std::visit([](auto a, auto b) {
+    std::cout << a << ", " << b;
+}, v1, v2);
+\`\`\`
+
 ## std::any
 
 可持有任意型別的值（類似 void*，但型別安全）：
@@ -1227,13 +1983,25 @@ std::get<std::string>(v); // "hello"
 std::any a = 42;
 a = std::string("hello");
 auto s = std::any_cast<std::string>(a);
+// 錯誤型別會拋出 std::bad_any_cast
 \`\`\`
+
+\\\`any\\\` 內部使用型別擦除，可能需要堆積配置，效能不如 \\\`variant\\\`。
+
+## 何時使用哪一個？
+
+- **函式可能無回傳值** → \\\`optional\\\`
+- **已知固定型別集合** → \\\`variant\\\`
+- **完全未知型別** → \\\`any\\\`（盡量避免）
+- **錯誤處理** → \\\`optional\\\` 或 \\\`variant<Value, Error>\\\`
 
 ## Best Practice
 
-- 優先使用 optional（明確語意）
-- variant 搭配 std::visit 使用
-- any 盡量少用，優先考慮 variant
+- 優先使用 \\\`optional\\\`（明確語意）
+- \\\`variant\\\` 搭配 \\\`std::visit\\\` 使用，避免 \\\`std::get\\\` 拋出例外
+- \\\`any\\\` 盡量少用，優先考慮 \\\`variant\\\`
+- 用 \\\`value_or()\\\` 提供預設值
+- 使用 overloaded lambda 模式簡化 visit
 `,
     codeExample: `#include <iostream>
 #include <optional>
@@ -1382,19 +2150,96 @@ concept Printable = requires(T t) {
 };
 \`\`\`
 
-## 使用 Concept
+## requires 表達式詳解
 
 \`\`\`cpp
-// 方式一：requires clause
+template<typename T>
+concept Container = requires(T c) {
+    c.begin();                                    // 簡單需求
+    c.end();
+    { c.size() } -> std::convertible_to<size_t>;  // 回傳型別約束
+    typename T::value_type;                        // 型別需求
+    requires sizeof(T) > 0;                        // 巢狀需求
+};
+
+// 複合需求
+template<typename T>
+concept Addable = requires(T a, T b) {
+    { a + b } -> std::same_as<T>;
+};
+\`\`\`
+
+## 使用 Concept 的四種語法
+
+\`\`\`cpp
+// 方式一：requires clause（尾端）
 template<typename T> requires Numeric<T>
 T add(T a, T b) { return a + b; }
 
-// 方式二：簡潔語法
-template<Numeric T>
-T multiply(T a, T b) { return a * b; }
+// 方式二：requires clause（前端）
+template<typename T>
+T multiply(T a, T b) requires Numeric<T> { return a * b; }
 
-// 方式三：auto 語法
+// 方式三：簡潔語法
+template<Numeric T>
+T divide(T a, T b) { return a / b; }
+
+// 方式四：abbreviated function template
 Numeric auto square(Numeric auto x) { return x * x; }
+\`\`\`
+
+## 約束 auto 參數
+
+\`\`\`cpp
+void print(const std::integral auto& value) {
+    std::cout << value << std::endl;
+}
+print(42);     // OK
+// print(3.14); // 編譯錯誤！
+\`\`\`
+
+## Concept-based 多載
+
+更特定的 concept 優先匹配：
+
+\`\`\`cpp
+template<typename T> void process(T) { /* general */ }
+template<std::integral T> void process(T) { /* integral */ }
+template<std::floating_point T> void process(T) { /* float */ }
+
+process(42);    // integral
+process(3.14);  // float
+process("hi");  // general
+\`\`\`
+
+## Subsumption（包含關係）
+
+\`\`\`cpp
+template<typename T>
+concept Movable = std::is_move_constructible_v<T>;
+template<typename T>
+concept Copyable = Movable<T> && std::is_copy_constructible_v<T>;
+
+// Copyable 包含 Movable，更特定的優先
+template<Movable T> void f(T) { /* 1 */ }
+template<Copyable T> void f(T) { /* 2 - Copyable 型別選此 */ }
+\`\`\`
+
+## 標準庫常用 Concepts
+
+\`\`\`cpp
+#include <concepts>
+std::integral<T>           // 整數型別
+std::floating_point<T>     // 浮點型別
+std::same_as<T, U>         // 型別相同
+std::convertible_to<T, U>  // 可轉換
+std::derived_from<T, U>    // 繼承關係
+std::equality_comparable<T> // 支援 ==
+std::totally_ordered<T>     // 支援比較
+std::movable<T>            // 可移動
+std::copyable<T>           // 可拷貝
+std::invocable<F, Args...> // 可呼叫
+std::predicate<F, Args...> // 回傳 bool 的可呼叫
 \`\`\`
 `,
     codeExample: `#include <iostream>
@@ -1549,7 +2394,32 @@ std::ranges::sort(vec);
 auto it = std::ranges::find(vec, 42);
 \`\`\`
 
-## Views（惰性求值）
+## Views vs Actions
+
+- **Views**：惰性求值，不建立新容器，遍歷時才計算
+- **Actions**：立即求值，如 \\\`ranges::sort\\\`
+
+\`\`\`cpp
+// View: 惰性，不配置記憶體
+auto v = vec | std::views::filter([](int n){ return n > 0; });
+// 此時沒有計算！遍歷時才執行
+
+// Action: 立即排序
+std::ranges::sort(vec);
+\`\`\`
+
+## 惰性求值 (Lazy Evaluation)
+
+可以處理無限序列：
+
+\`\`\`cpp
+auto squares = std::views::iota(1)     // 無限序列 1, 2, 3, ...
+    | std::views::transform([](int n){ return n * n; })
+    | std::views::take(5);
+// 只計算前 5 個: 1, 4, 9, 16, 25
+\`\`\`
+
+## Views（視圖）
 
 Views 不會建立新容器，而是在遍歷時動態計算：
 
@@ -1558,7 +2428,7 @@ auto even = vec | std::views::filter([](int n){ return n % 2 == 0; });
 auto squared = vec | std::views::transform([](int n){ return n * n; });
 \`\`\`
 
-## 管線組合
+## Range Adaptors（管線組合）
 
 \`\`\`cpp
 auto result = vec
@@ -1567,13 +2437,62 @@ auto result = vec
     | std::views::take(5);
 \`\`\`
 
+## 投影 (Projections)
+
+Ranges 演算法支援投影，簡化比較邏輯：
+
+\`\`\`cpp
+struct Person { std::string name; int age; };
+std::vector<Person> people = {{"Alice", 30}, {"Bob", 25}};
+
+// 按 age 排序
+std::ranges::sort(people, {}, &Person::age);
+// 按 name 查找
+auto it = std::ranges::find(people, "Bob", &Person::name);
+\`\`\`
+
+## ranges::to（C++23）
+
+將 view 轉換為容器：
+
+\`\`\`cpp
+// C++23
+auto vec = std::views::iota(1, 10)
+    | std::views::filter([](int n){ return n % 2 == 0; })
+    | std::ranges::to<std::vector>();
+
+// C++20 替代方案
+auto view = /* ... */;
+std::vector<int> vec2(view.begin(), view.end());
+\`\`\`
+
 ## 常用 Views
 
-- \`filter\` - 過濾
-- \`transform\` - 轉換
-- \`take\` / \`drop\` - 取前/去前 N 個
-- \`reverse\` - 反轉
-- \`keys\` / \`values\` - map 的鍵/值
+- \\\`filter\\\` - 過濾
+- \\\`transform\\\` - 轉換
+- \\\`take\\\` / \\\`drop\\\` - 取前/去前 N 個
+- \\\`take_while\\\` / \\\`drop_while\\\` - 條件取/去
+- \\\`reverse\\\` - 反轉
+- \\\`keys\\\` / \\\`values\\\` - map 的鍵/值
+- \\\`iota\\\` - 產生序列
+- \\\`split\\\` / \\\`join\\\` - 分割/合併
+- \\\`zip\\\` (C++23) - 配對多個範圍
+- \\\`enumerate\\\` (C++23) - 帶索引遍歷
+
+## Ranges 版演算法的改進
+
+\`\`\`cpp
+std::ranges::sort(vec);           // 接受容器
+std::ranges::find(vec, 42);       // 不需 begin/end
+std::ranges::max(people, {}, &Person::age); // 投影
+\`\`\`
+
+## Best Practice
+
+- 用管線組合取代巢狀迴圈
+- 利用惰性求值避免中間容器
+- 善用投影簡化比較邏輯
+- C++23 的 \\\`ranges::to\\\` 讓 view 到容器轉換更方便
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -1688,12 +2607,12 @@ int main() {
     difficulty: 'intermediate',
     content: `# RAII (Resource Acquisition Is Initialization)
 
-## 核心概念
+## RAII 是 C++ 的核心慣用法
 
-RAII 是 C++ 最重要的慣用法：
-- **取得資源**（記憶體、檔案、鎖）在**建構函式**中進行
+RAII 是 C++ 資源管理的**核心哲學**：
+- **取得資源**（記憶體、檔案、鎖、連線）在**建構函式**中進行
 - **釋放資源**在**解構函式**中自動進行
-- 物件離開作用域時，解構函式自動被呼叫
+- 物件離開作用域時，解構函式**保證**被呼叫（即使有例外）
 
 ## 為什麼 RAII 重要？
 
@@ -1701,7 +2620,7 @@ RAII 是 C++ 最重要的慣用法：
 // 不使用 RAII（危險！）
 void unsafe() {
     int* p = new int[100];
-    // 如果這裡拋出異常，記憶體洩漏！
+    // 如果拋出異常，記憶體洩漏！
     process(p);
     delete[] p;
 }
@@ -1710,21 +2629,105 @@ void unsafe() {
 void safe() {
     auto p = std::make_unique<int[]>(100);
     process(p.get());
-} // 自動釋放
+} // 無論正常或例外，都自動釋放
+\`\`\`
+
+## Scope Guard（作用域守衛）
+
+通用的 RAII 工具，離開作用域時執行清理：
+
+\`\`\`cpp
+class ScopeGuard {
+    std::function<void()> cleanup_;
+    bool active_ = true;
+public:
+    ScopeGuard(std::function<void()> f) : cleanup_(std::move(f)) {}
+    ~ScopeGuard() { if (active_) cleanup_(); }
+    void dismiss() { active_ = false; }
+};
+
+void transaction() {
+    beginTransaction();
+    ScopeGuard rollback([&]() { rollbackTransaction(); });
+    step1(); step2(); step3();
+    commitTransaction();
+    rollback.dismiss(); // 成功，不需回滾
+}
+\`\`\`
+
+## 各種資源的 RAII 管理
+
+\`\`\`cpp
+// 檔案：std::fstream 是天然 RAII
+void processFile(const std::string& path) {
+    std::ifstream file(path);
+    // 離開時自動關閉
+}
+
+// C API 用 unique_ptr 包裝
+auto file = std::unique_ptr<FILE, decltype(&fclose)>(
+    fopen("data.txt", "r"), fclose);
+
+// 互斥鎖
+std::mutex mtx;
+void safe_update() {
+    std::lock_guard lock(mtx);    // 上鎖
+    shared_data.update();
+}  // 自動解鎖，即使 update() 拋出例外
+
+// 資料庫連線
+class DBConnection {
+    Connection* conn_;
+public:
+    DBConnection(const std::string& url)
+        : conn_(db_connect(url.c_str())) {}
+    ~DBConnection() { db_disconnect(conn_); }
+    DBConnection(const DBConnection&) = delete;
+};
+\`\`\`
+
+## 異常安全保證
+
+RAII 是實現異常安全的基礎：
+
+- **nothrow**：操作保證不拋出例外
+- **strong**：全有或全無，失敗時狀態不變
+- **basic**：不會洩漏資源，物件仍有效
+- **no guarantee**：應避免
+
+RAII 自動提供至少 basic guarantee。
+
+## RAII vs finally / defer
+
+其他語言用 \\\`finally\\\`（Java）或 \\\`defer\\\`（Go）。C++ 的 RAII 更優越：
+
+- **自動化**：不需記得寫 finally
+- **可組合**：多個 RAII 物件按逆序銷毀
+- **零成本**：不需額外執行期機制
+
+\`\`\`cpp
+void example() {
+    std::lock_guard lock(mtx);          // 1
+    auto conn = DBConnection(url);      // 2
+    std::ofstream log("log.txt");       // 3
+    // 離開時按 3, 2, 1 順序自動清理
+}
 \`\`\`
 
 ## RAII 應用
 
 - 智慧指標管理記憶體
-- std::lock_guard 管理互斥鎖
+- std::lock_guard / unique_lock 管理互斥鎖
 - std::fstream 管理檔案
-- 自定義 RAII wrapper
+- ScopeGuard 管理臨時性清理
 
 ## Best Practice
 
 - 所有資源都應該被 RAII 物件管理
 - 永遠不要手動管理資源（new/delete, fopen/fclose）
 - 讓解構函式做清理工作
+- 解構函式不應拋出例外
+- 不可複製的資源禁用拷貝，允許移動
 `,
     codeExample: `#include <iostream>
 #include <fstream>
@@ -1892,8 +2895,89 @@ const int* const p;  // 都不能改
 
 \`\`\`cpp
 class MyClass {
-    int getValue() const;    // 不修改物件狀態
-    void setValue(int v);    // 可能修改物件狀態
+    int data_;
+public:
+    int getValue() const { return data_; }  // 承諾不修改物件
+    void setValue(int v) { data_ = v; }
+};
+const MyClass obj;
+obj.getValue();     // OK
+// obj.setValue(10); // 編譯錯誤！
+\`\`\`
+
+const 成員函式中 \\\`this\\\` 是 \\\`const MyClass*\\\`，不能修改非 mutable 成員。
+
+## mutable 關鍵字
+
+允許在 const 函式中修改特定成員（用於快取、鎖等）：
+
+\`\`\`cpp
+class Cached {
+    mutable int cache_ = -1;
+    mutable bool cached_ = false;
+public:
+    int compute() const {
+        if (!cached_) {
+            cache_ = /* 昂貴計算 */;
+            cached_ = true;
+        }
+        return cache_;
+    }
+};
+\`\`\`
+
+## const_cast
+
+移除 const 限定符（危險，應避免）：
+
+\`\`\`cpp
+const int x = 42;
+int& ref = const_cast<int&>(x);
+ref = 100;  // 未定義行為！
+
+// 唯一合理場景：不正確的遺留 API
+void legacy_api(char* str);  // 實際不修改 str
+legacy_api(const_cast<char*>("hello"));
+\`\`\`
+
+## East const vs West const
+
+\`\`\`cpp
+// West const（傳統）
+const int* p;
+// East const（一致性更好）
+int const* p;
+// 都正確，專案內保持一致即可
+\`\`\`
+
+## constexpr vs const
+
+\`\`\`cpp
+const int x = 42;       // 執行期常數
+constexpr int y = 42;   // 編譯期常數
+
+constexpr int factorial(int n) {
+    return n <= 1 ? 1 : n * factorial(n - 1);
+}
+constexpr int f5 = factorial(5); // 編譯期計算
+
+// C++20 consteval: 強制編譯期
+consteval int sqr(int n) { return n * n; }
+\`\`\`
+
+## const 在多執行緒中的角色
+
+C++11 規定 const 成員函式應該是執行緒安全的：
+
+\`\`\`cpp
+class ThreadSafe {
+    mutable std::mutex mtx_;
+    int data_ = 0;
+public:
+    int getData() const {
+        std::lock_guard lock(mtx_);
+        return data_;
+    }
 };
 \`\`\`
 
@@ -1909,7 +2993,10 @@ void process(const std::vector<int>& v);
 - 能加 const 就加 const
 - 成員函式盡量標 const
 - 參數傳遞用 const reference
-- 回傳值考慮是否需要 const
+- 用 \\\`mutable\\\` 處理快取和互斥鎖
+- 避免 \\\`const_cast\\\`
+- 用 \\\`constexpr\\\` 取代 const 做編譯期常數
+- const 成員函式應是執行緒安全的
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -2103,6 +3190,130 @@ private:
 - 日誌系統
 - 連線池
 - 注意：過度使用 Singleton 是 anti-pattern！
+
+## 為什麼 Singleton 具有爭議性？
+
+Singleton 經常被認為是一種 **anti-pattern**，原因包括：
+
+- **隱藏的依賴關係**：使用 Singleton 的類別不會在介面中顯示其依賴，讓程式碼難以理解
+- **全域可變狀態**：Singleton 本質上是全域變數的包裝，增加程式碼耦合度
+- **違反單一職責原則**：Singleton 同時管理自身的生命週期和業務邏輯
+- **難以平行測試**：多個測試共享同一個 Singleton 實例，測試之間會互相影響
+
+## 執行緒安全性深入探討
+
+### Meyer's Singleton（推薦）
+
+C++11 標準 §6.7 保證：如果多個執行緒同時進入 static local variable 的宣告，只有一個執行緒會執行初始化，其餘會等待：
+
+\`\`\`cpp
+// 這是 C++11 起最安全、最簡潔的寫法
+Singleton& Singleton::instance() {
+    static Singleton inst;  // 編譯器保證執行緒安全
+    return inst;
+}
+\`\`\`
+
+### Double-Checked Locking Anti-Pattern
+
+在 C++11 之前，開發者常使用 double-checked locking，但這在沒有記憶體屏障的情況下是 **未定義行為**：
+
+\`\`\`cpp
+// ❌ 經典的錯誤寫法（C++11 之前）
+class BadSingleton {
+    static BadSingleton* ptr;
+    static std::mutex mtx;
+public:
+    static BadSingleton* instance() {
+        if (!ptr) {                    // 第一次檢查（無鎖）
+            std::lock_guard<std::mutex> lock(mtx);
+            if (!ptr) {                // 第二次檢查（有鎖）
+                ptr = new BadSingleton;  // 可能重排序！
+            }
+        }
+        return ptr;
+    }
+};
+
+// ✅ 如果必須用指標，使用 call_once
+class SafeSingleton {
+    static std::unique_ptr<SafeSingleton> ptr;
+    static std::once_flag flag;
+public:
+    static SafeSingleton& instance() {
+        std::call_once(flag, []() {
+            ptr = std::make_unique<SafeSingleton>();
+        });
+        return *ptr;
+    }
+};
+\`\`\`
+
+## 替代方案：依賴注入 (Dependency Injection)
+
+與其使用 Singleton，更好的做法通常是**依賴注入**：
+
+\`\`\`cpp
+// ❌ 使用 Singleton — 耦合度高
+class Service {
+    void doWork() {
+        Logger::instance().log("working");  // 隱藏依賴
+    }
+};
+
+// ✅ 使用依賴注入 — 易於測試和替換
+class Service {
+    ILogger& logger_;
+public:
+    explicit Service(ILogger& logger) : logger_(logger) {}
+    void doWork() {
+        logger_.log("working");  // 明確依賴
+    }
+};
+\`\`\`
+
+## 可測試性問題
+
+Singleton 導致單元測試困難，因為無法輕易替換實例：
+
+\`\`\`cpp
+// 可測試的 Singleton 設計（折衷方案）
+class TestableLogger {
+public:
+    static TestableLogger& instance() {
+        static TestableLogger inst;
+        return inst;
+    }
+    // 允許測試時重置狀態
+    void reset() { messages_.clear(); }
+    // 或者使用可替換的介面
+    void setBackend(std::unique_ptr<ILogBackend> backend) {
+        backend_ = std::move(backend);
+    }
+private:
+    std::vector<std::string> messages_;
+    std::unique_ptr<ILogBackend> backend_;
+};
+\`\`\`
+
+## 適當使用 Singleton 的場景
+
+Singleton 在以下情況下是合理的：
+
+1. **硬體資源的抽象**：例如裝置驅動程式、螢幕管理器
+2. **真正的全域唯一資源**：如主事件迴圈、主視窗
+3. **效能關鍵的快取**：需要全域共享且初始化代價高昂
+4. **日誌系統**：幾乎每個元件都需要，注入反而增加複雜度
+
+### 最佳實踐總結
+
+| 做法 | 建議 |
+|------|------|
+| 使用 Meyer's Singleton | ✅ 推薦 |
+| 使用 double-checked locking | ❌ 避免 |
+| Singleton 搭配介面抽象 | ✅ 提升可測試性 |
+| 過度使用 Singleton | ❌ 考慮依賴注入 |
+| 在 Singleton 中持有可變狀態 | ⚠️ 需要額外的同步機制 |
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -2263,6 +3474,136 @@ public:
 - 資料綁定
 - 訊息系統
 - 日誌記錄
+
+## 事件驅動架構 (Event-Driven Architecture)
+
+觀察者模式是事件驅動架構的核心。在此架構中，程式的控制流由**事件**決定，而非順序執行：
+
+\`\`\`cpp
+// 事件驅動架構的基礎元件
+struct Event {
+    std::string type;
+    std::any data;
+    std::chrono::time_point<std::chrono::steady_clock> timestamp;
+};
+
+class EventBus {
+    std::unordered_map<std::string,
+        std::vector<std::function<void(const Event&)>>> handlers_;
+public:
+    void subscribe(const std::string& type, auto&& handler) {
+        handlers_[type].emplace_back(std::forward<decltype(handler)>(handler));
+    }
+    void publish(Event event) {
+        event.timestamp = std::chrono::steady_clock::now();
+        if (auto it = handlers_.find(event.type); it != handlers_.end()) {
+            for (auto& handler : it->second) handler(event);
+        }
+    }
+};
+\`\`\`
+
+## Signal/Slot 模式
+
+Signal/Slot 是觀察者模式的一種優雅實現，源自 Qt 框架，但可以用純 C++ 實現：
+
+\`\`\`cpp
+template<typename... Args>
+class Signal {
+    using SlotType = std::function<void(Args...)>;
+    std::vector<std::pair<int, SlotType>> slots_;
+    int next_id_ = 0;
+public:
+    // 連接 slot，返回 ID 用於斷開
+    int connect(SlotType slot) {
+        int id = next_id_++;
+        slots_.emplace_back(id, std::move(slot));
+        return id;
+    }
+    void disconnect(int id) {
+        std::erase_if(slots_, [id](const auto& p) { return p.first == id; });
+    }
+    void emit(Args... args) const {
+        for (const auto& [id, slot] : slots_) slot(args...);
+    }
+};
+\`\`\`
+
+## 使用 weak_ptr 防止懸空觀察者
+
+當觀察者的生命週期可能比被觀察者短時，使用 \`weak_ptr\` 來防止懸空指標：
+
+\`\`\`cpp
+template<typename... Args>
+class SafeSignal {
+    struct Connection {
+        int id;
+        std::weak_ptr<void> guard;  // 生命週期守衛
+        std::function<void(Args...)> callback;
+    };
+    std::vector<Connection> connections_;
+    int next_id_ = 0;
+public:
+    // 綁定時傳入觀察者的 shared_ptr 作為生命週期守衛
+    template<typename T>
+    int connect(std::shared_ptr<T> observer, std::function<void(Args...)> cb) {
+        int id = next_id_++;
+        connections_.push_back({id, observer, std::move(cb)});
+        return id;
+    }
+
+    void emit(Args... args) {
+        // 自動清除已失效的觀察者
+        std::erase_if(connections_, [](const auto& c) {
+            return c.guard.expired();
+        });
+        for (auto& conn : connections_) {
+            if (!conn.guard.expired()) {
+                conn.callback(args...);
+            }
+        }
+    }
+};
+\`\`\`
+
+## 使用 std::function 的現代 C++ 觀察者
+
+\`std::function\` 讓觀察者模式不再需要繼承介面，可以使用 lambda、函式指標、成員函式等：
+
+\`\`\`cpp
+class Button {
+public:
+    Signal<> onClick;                    // 無參數信號
+    Signal<int, int> onMouseMove;        // 帶座標信號
+
+    void click() { onClick.emit(); }
+    void moveMouse(int x, int y) { onMouseMove.emit(x, y); }
+};
+
+// 使用時非常靈活
+Button btn;
+btn.onClick.connect([]() { std::cout << "Lambda handler\\n"; });
+btn.onClick.connect(&freeFunction);
+btn.onClick.connect(std::bind(&MyClass::method, &obj));
+\`\`\`
+
+## 與響應式程式設計 (Reactive Programming) 的比較
+
+| 特性 | 觀察者模式 | 響應式程式設計 (RxCpp) |
+|------|-----------|----------------------|
+| 資料流 | 簡單推送 | 可組合的資料流 |
+| 運算子 | 無 | map, filter, merge 等 |
+| 錯誤處理 | 手動 | 內建 onError |
+| 背壓處理 | 無 | 支援背壓控制 |
+| 取消訂閱 | 手動管理 | Disposable 自動管理 |
+| 複雜度 | 低 | 高 |
+
+### 選擇建議
+
+- **簡單的事件通知** → 觀察者模式 + \`std::function\`
+- **複雜的事件流轉換** → 響應式程式設計
+- **GUI 事件處理** → Signal/Slot 模式
+- **跨模組通訊** → 事件匯流排 (EventBus)
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -2443,6 +3784,154 @@ public:
 - 開放封閉原則：新增產品不需修改工廠
 - 自動記憶體管理
 - 型別安全
+
+## 三種工廠模式的區別
+
+### 1. 簡單工廠 (Simple Factory)
+
+最基本的形式，使用一個函式根據參數決定建立哪種物件：
+
+\`\`\`cpp
+// 簡單工廠 — 使用 if/switch 判斷
+std::unique_ptr<Shape> createShape(const std::string& type) {
+    if (type == "circle") return std::make_unique<Circle>(1.0);
+    if (type == "rect")   return std::make_unique<Rectangle>(1.0, 1.0);
+    throw std::invalid_argument("Unknown shape: " + type);
+}
+\`\`\`
+
+**缺點**：每次新增產品都需要修改工廠函式，違反開放封閉原則。
+
+### 2. 工廠方法 (Factory Method)
+
+透過繼承讓子類別決定建立哪種物件：
+
+\`\`\`cpp
+class Document {
+public:
+    virtual ~Document() = default;
+    virtual std::unique_ptr<Page> createPage() = 0;  // 工廠方法
+};
+
+class PDFDocument : public Document {
+public:
+    std::unique_ptr<Page> createPage() override {
+        return std::make_unique<PDFPage>();
+    }
+};
+\`\`\`
+
+### 3. 抽象工廠 (Abstract Factory)
+
+建立一系列相關物件的介面：
+
+\`\`\`cpp
+class UIFactory {
+public:
+    virtual ~UIFactory() = default;
+    virtual std::unique_ptr<Button> createButton() = 0;
+    virtual std::unique_ptr<TextBox> createTextBox() = 0;
+};
+
+class WindowsUIFactory : public UIFactory {
+    std::unique_ptr<Button> createButton() override {
+        return std::make_unique<WindowsButton>();
+    }
+    std::unique_ptr<TextBox> createTextBox() override {
+        return std::make_unique<WindowsTextBox>();
+    }
+};
+\`\`\`
+
+## 註冊式工廠 (Registration-Based Factory)
+
+Modern C++ 中最常用的模式，產品類別自行註冊到工廠：
+
+\`\`\`cpp
+template<typename Base>
+class Factory {
+    using Creator = std::function<std::unique_ptr<Base>()>;
+    std::unordered_map<std::string, Creator> registry_;
+public:
+    void registerType(const std::string& name, Creator creator) {
+        registry_[name] = std::move(creator);
+    }
+    std::unique_ptr<Base> create(const std::string& name) const {
+        auto it = registry_.find(name);
+        if (it == registry_.end())
+            throw std::runtime_error("Unknown type: " + name);
+        return it->second();
+    }
+    std::vector<std::string> registeredTypes() const {
+        std::vector<std::string> types;
+        for (const auto& [name, _] : registry_) types.push_back(name);
+        return types;
+    }
+};
+\`\`\`
+
+## 使用 CRTP 實現自動註冊工廠
+
+透過 CRTP，讓子類別在程式啟動時**自動**註冊到工廠：
+
+\`\`\`cpp
+template<typename Base, typename Derived>
+class AutoRegister {
+    struct Registrar {
+        Registrar() {
+            Factory<Base>::instance().registerType(
+                Derived::typeName(),
+                []() { return std::make_unique<Derived>(); }
+            );
+        }
+    };
+    static inline Registrar registrar_{};  // C++17 inline static
+};
+
+// 繼承 AutoRegister 即自動註冊，無需手動呼叫
+class Circle : public Shape, public AutoRegister<Shape, Circle> {
+public:
+    static std::string typeName() { return "circle"; }
+    double area() const override { return 3.14159 * r_ * r_; }
+private:
+    double r_ = 1.0;
+};
+\`\`\`
+
+## 帶參數的現代工廠實現
+
+\`\`\`cpp
+template<typename Base, typename... Args>
+class ParametricFactory {
+    using Creator = std::function<std::unique_ptr<Base>(Args...)>;
+    std::unordered_map<std::string, Creator> creators_;
+public:
+    template<typename Derived>
+    void registerType(const std::string& name) {
+        creators_[name] = [](Args... args) {
+            return std::make_unique<Derived>(std::forward<Args>(args)...);
+        };
+    }
+    std::unique_ptr<Base> create(const std::string& name, Args... args) {
+        return creators_.at(name)(std::forward<Args>(args)...);
+    }
+};
+
+// 使用
+ParametricFactory<Shape, double> factory;
+factory.registerType<Circle>("circle");
+auto shape = factory.create("circle", 5.0);
+\`\`\`
+
+### 工廠模式選擇指南
+
+| 場景 | 推薦方式 |
+|------|---------|
+| 少量固定類型 | 簡單工廠 |
+| 框架中的擴展點 | 工廠方法 |
+| 跨平台 UI 元件 | 抽象工廠 |
+| 外掛系統 / 開放式擴展 | 註冊式工廠 |
+| 需要零配置的自動註冊 | CRTP 自動註冊工廠 |
 `,
     codeExample: `#include <iostream>
 #include <memory>
@@ -2664,6 +4153,99 @@ std::scoped_lock lock(mtx1, mtx2);
 - 優先使用 lock_guard/scoped_lock（RAII）
 - 最小化臨界區
 - 考慮使用 std::atomic 替代簡單的 mutex
+
+## 執行緒生命週期
+
+執行緒建立後必須選擇 join 或 detach：
+
+\`\`\`cpp
+std::thread t(task);
+t.join();    // 阻塞等待執行緒完成
+// 或
+t.detach();  // 分離執行緒，獨立執行
+// ❌ 既不 join 也不 detach，析構時呼叫 std::terminate()
+\`\`\`
+
+### joinable vs detached
+
+| 特性 | join | detach |
+|------|------|--------|
+| 主執行緒行為 | 阻塞等待 | 不等待 |
+| 適用場景 | 需要結果 | 背景任務 |
+| 安全性 | ✅ 較安全 | ⚠️ 注意生命週期 |
+
+## C++20: std::jthread
+
+自動 join 並支援協作取消：
+
+\`\`\`cpp
+{
+    std::jthread t([](std::stop_token stoken) {
+        while (!stoken.stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::cout << "收到停止請求\\n";
+    });
+} // 離開 scope 時自動請求停止並 join
+\`\`\`
+
+## Mutex 類型總覽
+
+### std::recursive_mutex
+允許同一執行緒多次鎖定（適用於遞迴呼叫）：
+\`\`\`cpp
+std::recursive_mutex rmtx;
+void funcA() { std::lock_guard lock(rmtx); funcB(); }
+void funcB() { std::lock_guard lock(rmtx); } // 同一執行緒，不死鎖
+\`\`\`
+
+### std::timed_mutex
+支援帶超時的鎖定嘗試：
+\`\`\`cpp
+std::timed_mutex tmtx;
+if (tmtx.try_lock_for(std::chrono::milliseconds(100))) {
+    tmtx.unlock();
+}
+\`\`\`
+
+### std::shared_mutex (C++17)
+讀寫鎖 — 多讀者共享，寫者獨佔：
+\`\`\`cpp
+std::shared_mutex rw_mutex;
+void reader() { std::shared_lock lock(rw_mutex); }
+void writer() { std::unique_lock lock(rw_mutex); }
+\`\`\`
+
+## Lock 類型比較
+
+| Lock 類型 | 特點 | 使用場景 |
+|-----------|------|---------|
+| lock_guard | 純 RAII | 基本互斥 |
+| unique_lock | 可延遲鎖定、轉移所有權 | 條件變數 |
+| shared_lock | 共享鎖 | 讀寫鎖讀端 |
+| scoped_lock | 同時鎖多個 mutex | 避免死鎖 |
+
+## 死鎖避免策略
+
+1. **鎖定順序**：所有執行緒以相同順序取得鎖
+2. **std::scoped_lock**：使用無死鎖演算法同時鎖定多個 mutex
+\`\`\`cpp
+std::scoped_lock lock(mtx1, mtx2);  // 推薦
+\`\`\`
+
+## thread_local 儲存
+
+每個執行緒擁有獨立副本，不需同步：
+\`\`\`cpp
+thread_local int counter = 0;
+\`\`\`
+
+## hardware_concurrency
+
+\`\`\`cpp
+unsigned int n = std::thread::hardware_concurrency();
+unsigned int pool_size = n > 0 ? n : 4;
+\`\`\`
 `,
     codeExample: `#include <iostream>
 #include <thread>
@@ -2888,6 +4470,135 @@ t.join();
 - 需要回傳值時使用 std::async
 - 不需要回傳值時使用 std::thread
 - 注意 future 的生命週期
+
+## shared_future：多個消費者
+
+\`std::future\` 只能 get() 一次，\`std::shared_future\` 允許多個消費者：
+
+\`\`\`cpp
+std::promise<int> p;
+std::shared_future<int> sf = p.get_future().share();
+
+// 多個執行緒可以同時等待同一個結果
+auto t1 = std::async([sf]() { return sf.get() * 2; });
+auto t2 = std::async([sf]() { return sf.get() + 10; });
+
+p.set_value(42);
+std::cout << t1.get() << ", " << t2.get(); // 84, 52
+\`\`\`
+
+## packaged_task：延遲執行
+
+將 callable 包裝成可延遲執行的任務，並提供 future：
+
+\`\`\`cpp
+std::packaged_task<int(int, int)> task([](int a, int b) {
+    return a + b;
+});
+
+auto future = task.get_future();
+// 任務還沒執行...
+task(3, 4);         // 現在執行
+int result = future.get(); // 7
+
+// 常用於執行緒池：將 task 放入佇列，由工作執行緒執行
+\`\`\`
+
+## 例外傳播
+
+例外會透過 future 自動傳播到呼叫者：
+
+\`\`\`cpp
+auto f = std::async([]() -> int {
+    throw std::runtime_error("計算失敗");
+    return 42;
+});
+
+try {
+    f.get();  // 重新拋出例外
+} catch (const std::exception& e) {
+    std::cout << "捕獲: " << e.what(); // "計算失敗"
+}
+
+// promise 也支援例外傳播
+std::promise<int> p;
+p.set_exception(std::make_exception_ptr(
+    std::runtime_error("錯誤")
+));
+\`\`\`
+
+## future 狀態檢查 (wait_for)
+
+非阻塞式檢查任務是否完成：
+
+\`\`\`cpp
+auto f = std::async(std::launch::async, long_task);
+
+// 非阻塞輪詢
+while (true) {
+    auto status = f.wait_for(std::chrono::milliseconds(100));
+    if (status == std::future_status::ready) {
+        std::cout << "結果: " << f.get() << "\\n";
+        break;
+    } else if (status == std::future_status::timeout) {
+        std::cout << "仍在計算...\\n";
+    } else if (status == std::future_status::deferred) {
+        std::cout << "延遲執行，呼叫 get() 才會開始\\n";
+        break;
+    }
+}
+\`\`\`
+
+## when_all / when_any 模式
+
+C++ 標準目前沒有 when_all/when_any，但可以自行實現：
+
+\`\`\`cpp
+// when_all：等待所有 future 完成
+template<typename... Futures>
+auto when_all(Futures&&... futures) {
+    return std::make_tuple(futures.get()...);
+}
+
+// when_any：返回最先完成的結果（簡化版）
+template<typename T>
+T when_any(std::vector<std::future<T>>& futures) {
+    while (true) {
+        for (auto& f : futures) {
+            if (f.wait_for(std::chrono::milliseconds(1))
+                == std::future_status::ready) {
+                return f.get();
+            }
+        }
+    }
+}
+\`\`\`
+
+## thread + promise vs async 比較
+
+| 特性 | std::async | thread + promise |
+|------|-----------|-----------------|
+| 簡潔度 | ✅ 非常簡潔 | ❌ 較冗長 |
+| 控制力 | ❌ 較少 | ✅ 完全控制 |
+| 例外處理 | 自動傳播 | 需手動 set_exception |
+| 執行策略 | launch::async/deferred | 一定建立執行緒 |
+| 執行緒重用 | 可能重用（實作決定） | 不重用 |
+
+\`\`\`cpp
+// std::async（簡潔）
+auto f = std::async(compute, args);
+auto result = f.get();
+
+// thread + promise（控制力強）
+std::promise<int> p;
+auto f = p.get_future();
+std::thread t([&p]() {
+    try { p.set_value(compute()); }
+    catch (...) { p.set_exception(std::current_exception()); }
+});
+auto result = f.get();
+t.join();
+\`\`\`
 `,
     codeExample: `#include <iostream>
 #include <future>
@@ -3028,36 +4739,365 @@ int main() {
     difficulty: 'advanced',
     content: `# 條件變數 (Condition Variables)
 
-## 概念
+## 什麼是條件變數？為什麼需要它？
 
-條件變數允許執行緒等待某個條件成立後再繼續：
+在多執行緒程式設計中，我們經常遇到「一個執行緒需要等待某個條件成立才能繼續執行」的場景。最直覺的做法是**忙等待 (busy-waiting)**：
+
+\`\`\`cpp
+// ❌ 忙等待：浪費 CPU 資源
+while (!ready) {
+    // 不斷檢查，佔用 CPU 時間
+}
+\`\`\`
+
+這種方式極度浪費 CPU 資源。條件變數 (Condition Variable) 提供了一種高效的替代方案：讓等待的執行緒**進入睡眠狀態**，直到被其他執行緒**喚醒**。
+
+\`\`\`cpp
+// ✅ 使用條件變數：高效等待
+std::unique_lock<std::mutex> lock(mtx);
+cv.wait(lock, [&]{ return ready; });  // 睡眠直到 ready 為 true
+\`\`\`
+
+## 條件變數的內部機制：wait/notify 協議
+
+條件變數的運作基於 **wait/notify** 協議：
+
+1. **等待方 (waiter)**：
+   - 取得 mutex 鎖
+   - 檢查條件是否滿足
+   - 若不滿足，呼叫 \`cv.wait()\`：**原子地釋放鎖並進入睡眠**
+   - 被喚醒後，**自動重新取得鎖**
+   - 再次檢查條件（防止虛假喚醒）
+
+2. **通知方 (notifier)**：
+   - 取得 mutex 鎖
+   - 修改共享狀態（使條件成立）
+   - 釋放鎖
+   - 呼叫 \`notify_one()\` 或 \`notify_all()\` 喚醒等待的執行緒
 
 \`\`\`cpp
 std::mutex mtx;
 std::condition_variable cv;
-bool ready = false;
+bool data_ready = false;
 
 // 等待方
-std::unique_lock<std::mutex> lock(mtx);
-cv.wait(lock, [&]{ return ready; });
+void consumer() {
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [&]{ return data_ready; });
+    // 此時 lock 已重新取得，可安全存取共享資料
+    process_data();
+}
 
 // 通知方
+void producer() {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        prepare_data();
+        data_ready = true;
+    }  // 鎖在此釋放
+    cv.notify_one();  // 喚醒一個等待的執行緒
+}
+\`\`\`
+
+## std::condition_variable vs std::condition_variable_any
+
+C++ 標準庫提供兩種條件變數：
+
+| 特性 | condition_variable | condition_variable_any |
+|------|-------------------|----------------------|
+| 鎖類型 | 只能搭配 \`std::unique_lock<std::mutex>\` | 可搭配任何符合 BasicLockable 的鎖 |
+| 效能 | 較高（針對 mutex 最佳化） | 較低（需要額外的內部鎖） |
+| 使用場景 | 大多數情況 | 需要自訂鎖或 shared_mutex 時 |
+
+\`\`\`cpp
+// condition_variable_any 可搭配 shared_lock
+std::shared_mutex smtx;
+std::condition_variable_any cv_any;
+
+// 可以用 shared_lock 等待
+std::shared_lock<std::shared_mutex> slock(smtx);
+cv_any.wait(slock, [&]{ return ready; });
+\`\`\`
+
+**建議**：除非有特殊需求，優先使用 \`std::condition_variable\`，效能更好。
+
+## 為什麼必須用 unique_lock？不能用 lock_guard？
+
+\`cv.wait()\` 在內部需要執行兩個關鍵操作：
+1. **釋放鎖**（讓其他執行緒能修改共享狀態）
+2. **重新取得鎖**（被喚醒後保護共享資料的存取）
+
+\`lock_guard\` 只支援 RAII 式的建構時上鎖、解構時解鎖，**沒有中途解鎖/重新上鎖的能力**。而 \`unique_lock\` 提供了 \`lock()\`、\`unlock()\` 方法，讓條件變數能在 wait 時操控鎖的狀態。
+
+\`\`\`cpp
+// unique_lock 的靈活性
+std::unique_lock<std::mutex> lock(mtx);
+// lock 已上鎖
+cv.wait(lock, pred);
+// wait 內部流程：
+//   1. 若 pred() 為 false：
+//      a. lock.unlock()   ← 需要 unique_lock 的 unlock()
+//      b. 進入睡眠等待通知
+//      c. 被喚醒後 lock.lock()  ← 需要 unique_lock 的 lock()
+//      d. 回到步驟 1 重新檢查 pred()
+//   2. 若 pred() 為 true：返回，此時鎖仍被持有
+\`\`\`
+
+## 虛假喚醒 (Spurious Wakeups)
+
+### 什麼是虛假喚醒？
+
+虛假喚醒是指執行緒在**沒有收到 notify 的情況下被喚醒**。這是作業系統和硬體層面的行為，POSIX 標準明確允許這種情況發生。原因包括：
+
+- 作業系統的執行緒調度機制
+- 多處理器系統的信號處理
+- 系統中斷
+
+### 如何防範？
+
+**永遠使用帶有 predicate 的 wait 版本**：
+
+\`\`\`cpp
+// ❌ 不安全：可能因虛假喚醒而錯誤地繼續執行
+cv.wait(lock);
+// 醒來了，但條件可能還沒成立！
+
+// ✅ 安全：predicate 版本自動處理虛假喚醒
+cv.wait(lock, [&]{ return ready; });
+// 等同於：
+// while (!ready) { cv.wait(lock); }
+\`\`\`
+
+predicate 版本在每次喚醒時都會重新檢查條件，只有條件為 true 時才真正返回。
+
+## wait 的三種變體
+
+### 1. wait — 無限等待
+
+\`\`\`cpp
+// 等到條件滿足為止
+std::unique_lock<std::mutex> lock(mtx);
+cv.wait(lock, [&]{ return ready; });
+\`\`\`
+
+### 2. wait_for — 限時等待（相對時間）
+
+\`\`\`cpp
+std::unique_lock<std::mutex> lock(mtx);
+// 最多等待 5 秒
+auto status = cv.wait_for(lock, std::chrono::seconds(5),
+                          [&]{ return ready; });
+if (status) {
+    // 條件在時限內滿足
+} else {
+    // 超時，條件仍未滿足
+}
+\`\`\`
+
+### 3. wait_until — 限時等待（絕對時間）
+
+\`\`\`cpp
+std::unique_lock<std::mutex> lock(mtx);
+auto deadline = std::chrono::steady_clock::now()
+                + std::chrono::seconds(10);
+auto status = cv.wait_until(lock, deadline,
+                            [&]{ return ready; });
+if (status) {
+    // 條件在期限前滿足
+} else {
+    // 已超過期限
+}
+\`\`\`
+
+## notify_one vs notify_all
+
+| 方法 | 行為 | 使用時機 |
+|------|------|---------|
+| \`notify_one()\` | 喚醒**一個**等待中的執行緒 | 只有一個執行緒能處理，或任一執行緒都可以處理 |
+| \`notify_all()\` | 喚醒**所有**等待中的執行緒 | 多個執行緒可能都需要回應，或條件改變影響所有等待者 |
+
+\`\`\`cpp
+// 場景 1：生產者-消費者（notify_one 即可）
+// 每次只有一個消費者能取走一個任務
+queue.push(task);
+cv.notify_one();
+
+// 場景 2：狀態改變（使用 notify_all）
+// 所有等待者都需要知道遊戲結束了
+game_over = true;
+cv.notify_all();
+
+// 場景 3：關閉佇列（使用 notify_all）
+// 所有消費者都需要被喚醒以檢查關閉狀態
+done = true;
+cv.notify_all();
+\`\`\`
+
+## 經典模式
+
+### 1. 生產者-消費者 (Producer-Consumer)
+
+\`\`\`cpp
+template<typename T>
+class ThreadSafeQueue {
+    std::queue<T> queue_;
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    bool closed_ = false;
+public:
+    void push(T val) {
+        { std::lock_guard lk(mtx_); queue_.push(std::move(val)); }
+        cv_.notify_one();
+    }
+    bool pop(T& val) {
+        std::unique_lock lk(mtx_);
+        cv_.wait(lk, [&]{ return !queue_.empty() || closed_; });
+        if (queue_.empty()) return false;
+        val = std::move(queue_.front()); queue_.pop();
+        return true;
+    }
+    void close() {
+        { std::lock_guard lk(mtx_); closed_ = true; }
+        cv_.notify_all();
+    }
+};
+\`\`\`
+
+### 2. 有界緩衝區 (Bounded Buffer)
+
+\`\`\`cpp
+template<typename T>
+class BoundedBuffer {
+    std::queue<T> buf_;
+    size_t cap_;
+    std::mutex mtx_;
+    std::condition_variable not_full_, not_empty_;
+public:
+    BoundedBuffer(size_t cap) : cap_(cap) {}
+    void put(T val) {
+        std::unique_lock lk(mtx_);
+        not_full_.wait(lk, [&]{ return buf_.size() < cap_; });
+        buf_.push(std::move(val));
+        not_empty_.notify_one();
+    }
+    T take() {
+        std::unique_lock lk(mtx_);
+        not_empty_.wait(lk, [&]{ return !buf_.empty(); });
+        T val = std::move(buf_.front()); buf_.pop();
+        not_full_.notify_one();
+        return val;
+    }
+};
+\`\`\`
+
+### 3. 事件通知 (One-shot Event)
+
+\`\`\`cpp
+class Event {
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    bool signaled_ = false;
+public:
+    void signal() {
+        { std::lock_guard lk(mtx_); signaled_ = true; }
+        cv_.notify_all();
+    }
+    void wait() {
+        std::unique_lock lk(mtx_);
+        cv_.wait(lk, [&]{ return signaled_; });
+    }
+};
+\`\`\`
+
+### 4. 屏障 (Barrier)
+
+\`\`\`cpp
+class SimpleBarrier {
+    std::mutex mtx_;
+    std::condition_variable cv_;
+    int count_;
+    int waiting_ = 0;
+public:
+    SimpleBarrier(int n) : count_(n) {}
+    void arrive_and_wait() {
+        std::unique_lock lk(mtx_);
+        ++waiting_;
+        if (waiting_ >= count_) {
+            waiting_ = 0;
+            cv_.notify_all();
+        } else {
+            cv_.wait(lk, [&]{ return waiting_ == 0; });
+        }
+    }
+};
+\`\`\`
+
+## 常見陷阱
+
+### 1. 丟失通知 (Lost Notification)
+
+\`\`\`cpp
+// ❌ 錯誤：如果 notify 在 wait 之前發生，通知就丟失了
+// 執行緒 A                    // 執行緒 B
+                              ready = true;
+                              cv.notify_one();
+cv.wait(lock);                // 永遠不會被喚醒！
+
+// ✅ 正確：先檢查條件，再決定是否等待
+cv.wait(lock, [&]{ return ready; });
+// 如果 ready 已為 true，直接返回
+\`\`\`
+
+### 2. 忘記持有鎖就修改共享狀態
+
+\`\`\`cpp
+// ❌ 資料競爭！
+ready = true;          // 沒有鎖保護
+cv.notify_one();
+
+// ✅ 正確
 {
-    std::lock_guard<std::mutex> lock(mtx);
-    ready = true;
+    std::lock_guard lk(mtx);
+    ready = true;      // 在鎖保護下修改
 }
 cv.notify_one();
 \`\`\`
 
-## 生產者-消費者模式
+### 3. notify 的時機
 
-經典的多執行緒設計模式，使用條件變數和佇列實現。
+\`\`\`cpp
+// 可以在鎖內或鎖外 notify，但鎖外通常更好
+// 鎖內 notify 可能導致被喚醒的執行緒立刻阻塞在 mutex 上
+{
+    std::lock_guard lk(mtx);
+    ready = true;
+    cv.notify_one();  // 可行但不最佳
+}
 
-## 注意事項
+// 更好：鎖外 notify
+{
+    std::lock_guard lk(mtx);
+    ready = true;
+}
+cv.notify_one();  // 被喚醒的執行緒可直接取得鎖
+\`\`\`
 
-- wait 必須搭配 unique_lock（不能用 lock_guard）
-- 使用 predicate 版本的 wait 避免虛假喚醒
-- notify_one vs notify_all
+## 效能考量
+
+1. **優先使用 notify_one()**：當只需要喚醒一個執行緒時，避免不必要的「驚群效應 (thundering herd)」
+2. **減少鎖的持有時間**：在鎖外呼叫 notify，減少不必要的鎖競爭
+3. **避免頻繁的 notify**：批量處理後再通知，減少上下文切換
+4. **考慮使用 std::atomic + wait/notify**：C++20 提供了原子變數的 wait() 和 notify_one/all()，對於簡單的標誌位等待更輕量
+5. **條件變數 vs 忙等待**：條件變數有系統呼叫的開銷，對於極短的等待（奈秒級），自旋鎖可能更高效
+
+## 實際應用場景
+
+- **執行緒池 (Thread Pool)**：工作執行緒等待新任務到來
+- **任務佇列 (Task Queue)**：非同步任務排程與處理
+- **資源池 (Connection Pool)**：等待可用的資料庫連線
+- **日誌系統**：背景執行緒等待日誌資料寫入
+- **事件驅動架構**：等待特定事件觸發後執行相應操作
+- **流水線處理**：各階段等待前一階段的輸出
 `,
     codeExample: `#include <iostream>
 #include <thread>
@@ -3313,6 +5353,86 @@ void execute(Strategy& s, std::vector<int>& data) {
 - 效能敏感用 \`std::variant\` + \`std::visit\`（零成本）
 - 策略數量固定且已知時優先考慮 variant
 - 策略數量不確定或需要外掛機制時用 std::function
+
+## 策略模式 vs 模板方法模式
+
+| 特性 | 策略模式 | 模板方法模式 |
+|------|---------|-------------|
+| 變化機制 | 組合 (has-a) | 繼承 (is-a) |
+| 切換時機 | 執行期動態切換 | 編譯期固定 |
+| 彈性 | ✅ 高 | ❌ 較低 |
+| 演算法結構 | 完全由策略決定 | 骨架固定，步驟可覆寫 |
+
+\`\`\`cpp
+// 模板方法：骨架固定，子類覆寫步驟
+class DataProcessor {
+public:
+    void process() {
+        readData();
+        transform();   // 子類覆寫
+        writeData();
+    }
+protected:
+    virtual void transform() = 0;
+};
+
+// 策略模式：整個演算法可替換
+class DataProcessor2 {
+    std::function<Data(const Data&)> transform_;
+public:
+    void setTransform(auto&& fn) { transform_ = std::forward<decltype(fn)>(fn); }
+};
+\`\`\`
+
+## 編譯期策略：Policy-Based Design
+
+使用模板參數在編譯期選擇策略，零執行期開銷：
+
+\`\`\`cpp
+template<typename SortPolicy, typename PrintPolicy>
+class DataHandler : private SortPolicy, private PrintPolicy {
+    std::vector<int> data_;
+public:
+    void process() {
+        this->sort(data_);    // SortPolicy::sort
+        this->print(data_);   // PrintPolicy::print
+    }
+};
+
+struct QuickSortPolicy {
+    void sort(std::vector<int>& v) { std::sort(v.begin(), v.end()); }
+};
+
+DataHandler<QuickSortPolicy, ConsolePrintPolicy> handler;
+\`\`\`
+
+這是 Alexandrescu 提倡的 **Policy-Based Design**。
+
+## std::function 效能考量
+
+\`std::function\` 有一定的額外開銷：
+- **小型物件最佳化 (SBO)**：小 callable 不需堆分配
+- **大型 lambda**：可能觸發堆分配
+- **呼叫開銷**：每次經過間接跳轉
+
+\`\`\`cpp
+// 效能敏感的替代方案
+// 1. 模板參數（零成本）
+template<typename Strategy>
+void process(Strategy&& s) { s(); }
+
+// 2. std::variant + std::visit（封閉集合，零成本）
+using Strategy = std::variant<StrategyA, StrategyB>;
+\`\`\`
+
+### 選擇指南
+
+| 需求 | 推薦方式 |
+|------|---------|
+| 編譯期固定策略 | 模板參數 (Policy) |
+| 執行期切換、簡單介面 | std::function + lambda |
+| 執行期切換、複雜介面 | 虛擬函式 + unique_ptr |
+| 封閉集合、效能敏感 | std::variant + std::visit |
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -3536,6 +5656,96 @@ std::visit(overloaded{
 - 序列化/反序列化
 - 圖形渲染
 - 編譯器/直譯器
+
+## 雙重分派 (Double Dispatch) 深入解析
+
+C++ 的虛擬函式只支援**單一分派**（根據物件的動態型別選擇方法）。Visitor 需要根據**兩個**物件的型別選擇行為，這就是雙重分派：
+
+\`\`\`cpp
+// 第一次分派：shape->accept(visitor) — 根據 shape 的型別
+// 第二次分派：visitor.visit(*this) — 根據 visitor 的型別
+
+class ShapeVisitor;
+class Shape {
+public:
+    virtual void accept(ShapeVisitor& v) = 0;
+};
+
+class ShapeVisitor {
+public:
+    virtual void visit(Circle& c) = 0;
+    virtual void visit(Rectangle& r) = 0;
+};
+
+class Circle : public Shape {
+public:
+    void accept(ShapeVisitor& v) override { v.visit(*this); }
+};
+\`\`\`
+
+## 表達式問題 (Expression Problem)
+
+這是程式語言理論中的經典難題：
+
+- **物件導向**：容易新增型別，難以新增操作
+- **函數式/Visitor**：容易新增操作，難以新增型別
+
+\`\`\`
+              新增型別    新增操作
+OOP（虛擬函式）   ✅ 容易    ❌ 難
+Visitor          ❌ 難      ✅ 容易
+variant+visit    ⚠️ 需改    ✅ 容易（但編譯器會提醒遺漏）
+\`\`\`
+
+\`std::variant\` 的優勢是：新增型別時，編譯器會在所有 \`std::visit\` 的地方報錯，提醒你處理新型別。
+
+## std::variant + std::visit 作為現代 Visitor
+
+\`\`\`cpp
+using Shape = std::variant<Circle, Rectangle, Triangle>;
+
+// Visitor 1: 計算面積
+double area(const Shape& s) {
+    return std::visit([](const auto& shape) { return shape.area(); }, s);
+}
+
+// Visitor 2: 序列化（使用 overloaded pattern）
+std::string serialize(const Shape& s) {
+    return std::visit(overloaded{
+        [](const Circle& c)    { return "circle:" + std::to_string(c.r); },
+        [](const Rectangle& r) { return "rect:" + std::to_string(r.w); },
+        [](const Triangle& t)  { return "tri:" + std::to_string(t.base); }
+    }, s);
+}
+\`\`\`
+
+## Overloaded Lambda Pattern 詳解
+
+\`\`\`cpp
+// C++17 版本
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+// C++20 版本（不需要推導指南）
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+
+// 使用方式
+auto visitor = overloaded{
+    [](int i)    { std::cout << "int: " << i; },
+    [](double d) { std::cout << "double: " << d; },
+    [](auto& x)  { std::cout << "other"; }  // 預設處理
+};
+\`\`\`
+
+## 與虛擬函式的比較
+
+| 特性 | 虛擬函式 | variant + visit |
+|------|---------|----------------|
+| 型別集合 | 開放（可繼承擴展） | 封閉（variant 中列舉） |
+| 記憶體配置 | 堆分配 + 指標 | 棧上（variant 大小固定） |
+| 效能 | vtable 間接跳轉 | 編譯期分派 |
+| 適用場景 | 開放型別集合 | 封閉型別集合 |
+| 快取友善度 | ❌ 指標追蹤 | ✅ 資料連續 |
 `,
     codeExample: `#include <iostream>
 #include <variant>
@@ -3833,6 +6043,98 @@ public:
 - 提供 mixin 功能（可重用的行為）
 - 不需要在同一個容器中混合不同型別時
 - C++20 前的靜態介面（C++20 後考慮用 Concepts）
+
+## 靜態多態深入解析
+
+CRTP 在編譯期解析所有呼叫，編譯器可以完全內聯：
+
+\`\`\`cpp
+template<typename Derived>
+class Shape {
+public:
+    double area() const {
+        return static_cast<const Derived*>(this)->area_impl();
+    }
+};
+
+// 使用模板函式處理
+template<typename T>
+void processShape(const Shape<T>& s) {
+    std::cout << "面積: " << s.area() << "\\n";  // 直接內聯
+}
+\`\`\`
+
+## Mixin 模式
+
+為類別混入可重用的功能：
+
+\`\`\`cpp
+template<typename Derived>
+class Printable {
+public:
+    void print() const {
+        std::cout << static_cast<const Derived*>(this)->to_string() << "\\n";
+    }
+    friend std::ostream& operator<<(std::ostream& os, const Derived& d) {
+        return os << d.to_string();
+    }
+};
+
+class Person : public Printable<Person> {
+public:
+    std::string to_string() const { return "Person: " + name_; }
+};
+\`\`\`
+
+## 編譯期介面強制
+
+基底類別可在編譯期強制衍生類別實現介面——如果 Derived 缺少必要方法，編譯時會報錯。
+
+## Barton-Nackman Trick
+
+結合 CRTP 與 friend 函式，自動生成運算子：
+
+\`\`\`cpp
+template<typename Derived>
+class EqualityComparable {
+    friend bool operator==(const Derived& a, const Derived& b) {
+        return a.equal_to(b);
+    }
+    friend bool operator!=(const Derived& a, const Derived& b) {
+        return !a.equal_to(b);
+    }
+};
+
+class Point : public EqualityComparable<Point> {
+public:
+    bool equal_to(const Point& o) const { return x_ == o.x_ && y_ == o.y_; }
+};
+\`\`\`
+
+## CRTP vs Concepts (C++20)
+
+C++20 Concepts 在許多場景可取代 CRTP：
+
+\`\`\`cpp
+// Concepts 做約束（更簡潔）
+template<typename T>
+concept Addable = requires(T a, T b) { { a + b } -> std::same_as<T>; };
+\`\`\`
+
+**但 CRTP 仍然需要的場景**：注入功能、自動生成程式碼、per-type 靜態資料。
+
+## 實際案例
+
+### std::enable_shared_from_this
+\`\`\`cpp
+class Widget : public std::enable_shared_from_this<Widget> {
+public:
+    std::shared_ptr<Widget> getPtr() { return shared_from_this(); }
+};
+\`\`\`
+
+### Iterator Facade
+使用 CRTP 讓自訂迭代器只需實現核心函式（dereference、increment、equal），其餘運算子自動生成。
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -4074,6 +6376,73 @@ ThreadPool
 - 執行緒數量通常設為 \`std::thread::hardware_concurrency()\`
 - 任務應該是獨立的，避免任務間的依賴
 - 避免在任務中持有鎖太久
+
+## 執行緒建立的系統開銷
+
+建立執行緒的成本包括核心呼叫、堆疊分配（每執行緒 1-8 MB）、TLS 初始化等。在高頻任務場景下，建立/銷毀成本可能超過任務本身。
+
+## Work Stealing（工作竊取）
+
+每個 worker 有自己的佇列，空閒時從其他 worker「竊取」任務：
+
+\`\`\`cpp
+// 概念示意
+void worker(int id) {
+    while (!stop_) {
+        if (tryPop(myQueue_, task)) { task(); continue; }
+        // 自己沒任務，嘗試竊取
+        for (auto& q : otherQueues_) {
+            if (trySteal(q, task)) { task(); break; }
+        }
+    }
+}
+\`\`\`
+
+## 優先佇列排程
+
+\`\`\`cpp
+struct PrioritizedTask {
+    int priority;
+    std::function<void()> task;
+    bool operator<(const PrioritizedTask& o) const {
+        return priority < o.priority;
+    }
+};
+// 使用 std::priority_queue<PrioritizedTask>
+\`\`\`
+
+## 執行緒池大小選擇
+
+- **CPU 密集型**：threads = hardware_concurrency()
+- **I/O 密集型**：threads = hardware_concurrency() * 2 或更多
+- **混合型**：需要實際測量調整
+
+## 優雅關閉
+
+1. 設定停止旗標  2. notify_all 喚醒 worker  3. 等待進行中任務完成  4. join 所有執行緒
+
+## 任務中的例外處理
+
+使用 \`std::packaged_task\` 包裝任務，例外會被自動捕獲並透過 \`future.get()\` 傳播給呼叫者。
+
+## 使用 std::jthread (C++20)
+
+\`\`\`cpp
+class JThreadPool {
+    std::vector<std::jthread> workers_;  // 自動 join
+public:
+    JThreadPool(size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            workers_.emplace_back([this](std::stop_token stoken) {
+                while (!stoken.stop_requested()) {
+                    // 取任務並執行...
+                }
+            });
+        }
+    }
+    // 不需要手動析構
+};
+\`\`\`
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -4376,6 +6745,78 @@ void push(T value) {
 - 複雜資料結構的無鎖實作要非常小心
 - 優先使用 \`seq_cst\`，只在效能瓶頸時考慮更弱的 order
 - 無鎖不代表無等待（lock-free ≠ wait-free）
+
+## ABA 問題
+
+無鎖程式設計中最臭名昭著的問題。執行緒讀到值 A，其他執行緒將 A 改為 B 再改回 A，CAS 誤判為未變化。解決方案包括標記指標（tagged pointer）和 hazard pointers。
+
+## 記憶體順序深入解析
+
+### happens-before 與 synchronizes-with
+
+\`\`\`cpp
+std::atomic<bool> ready{false};
+int data = 0;
+
+// 執行緒 1
+data = 42;
+ready.store(true, memory_order_release); // release
+
+// 執行緒 2
+while (!ready.load(memory_order_acquire)); // acquire
+// 保證看到 data == 42（release synchronizes-with acquire）
+\`\`\`
+
+### 各記憶體順序用途
+
+| 順序 | 用途 | 開銷 |
+|------|------|------|
+| seq_cst | 預設，全局一致 | 最高 |
+| acquire | 讀取屏障 | 中 |
+| release | 寫入屏障 | 中 |
+| acq_rel | acquire + release | 中 |
+| relaxed | 只保證原子性 | 最低 |
+
+## compare_exchange_weak vs strong
+
+- **strong**：只在值不等時才失敗
+- **weak**：可能「假失敗」，但迴圈中效能更好
+
+**準則**：迴圈中用 weak，單次嘗試用 strong。
+
+## atomic_flag
+
+最基本的原子類型，保證無鎖，常用於自旋鎖：
+
+\`\`\`cpp
+class Spinlock {
+    std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
+public:
+    void lock() {
+        while (flag_.test_and_set(std::memory_order_acquire));
+    }
+    void unlock() { flag_.clear(std::memory_order_release); }
+};
+\`\`\`
+
+## Lock-Free vs Wait-Free
+
+- **Lock-Free**：至少一個執行緒能在有限步驟完成
+- **Wait-Free**：每個執行緒都能在有限步驟完成（最強保證）
+
+大多數「無鎖」資料結構是 lock-free 而非 wait-free。
+
+## Hazard Pointers 概念
+
+每個執行緒標記正在存取的指標，回收時檢查：若節點在任何危險清單中則延遲回收，否則安全釋放。
+
+## 實用指南
+
+1. **優先使用 mutex**：無鎖程式設計極難正確實現
+2. **簡單計數器**：\`std::atomic\` + relaxed
+3. **同步場景**：acquire/release 配對
+4. **預設 seq_cst**：只在效能瓶頸時放寬
+5. **測試不足以驗證**：並發 bug 可能極難重現
 `,
     codeExample: `#include <iostream>
 #include <atomic>
@@ -4681,6 +7122,43 @@ Generator<T>
 - 協程機制是底層的，通常需要自定義 Generator 類別
 - C++23 的 \`std::generator\` 提供標準化的生成器（部分編譯器已支援）
 - 協程本身不是多執行緒，但可以搭配使用
+
+## Stackless vs Stackful 協程
+
+C++20 採用 **stackless** 協程：記憶體輕量（只分配協程框架），但只能在最頂層暫停。相比之下，stackful 協程（如 Boost.Context）需要完整堆疊但可在任何深度暫停。
+
+## 協程框架 (Coroutine Frame)
+
+編譯器為每個協程在堆上分配框架，儲存 promise 物件、參數副本、局部變數與恢復位址。HALO 最佳化可能將框架放在堆疊上。
+
+## promise_type 自訂點詳解
+
+\\\`\\\`\\\`cpp
+struct promise_type {
+    auto get_return_object();        // 建立回傳物件
+    auto initial_suspend();          // suspend_always=惰性, suspend_never=立即
+    auto final_suspend() noexcept;   // 結束時暫停？
+    void unhandled_exception();      // 例外處理
+    void return_void();              // co_return;
+    auto yield_value(T);             // co_yield value;
+    auto await_transform(expr);      // 自訂 co_await
+};
+\\\`\\\`\\\`
+
+## Awaitable / Awaiter 介面
+
+co_await 需要 awaiter 物件，定義 await_ready()、await_suspend(handle)、await_resume() 三個方法。await_suspend 的回傳型別控制行為：void 暫停、bool 條件暫停、coroutine_handle 對稱轉移。
+
+## 對稱轉移 (Symmetric Transfer)
+
+await_suspend 回傳 coroutine_handle 可直接恢復另一個協程，避免堆疊溢位，是實現高效排程器的關鍵。
+
+## 實際應用場景
+
+- **非同步 I/O**：co_await async_read() 等待 I/O 完成
+- **事件迴圈**：在迴圈中 co_await 各種事件
+- **解析器**：使用 co_yield 逐一產出 token
+- **惰性序列**：按需生成值，節省記憶體
 `,
     codeExample: `#include <iostream>
 #include <coroutine>
@@ -5001,6 +7479,89 @@ std::vector<int, PoolAllocator<int>> vec;
 - 對效能關鍵的資料結構使用對齊
 - 頻繁配置/釋放小物件時考慮記憶體池
 - 使用 PMR (Polymorphic Memory Resource, C++17) 簡化自定義配置
+
+## Stack vs Heap 深入比較
+
+| 特性 | Stack | Heap |
+|------|-------|------|
+| 配置速度 | 極快（移動指標） | 慢（系統呼叫） |
+| 大小限制 | 1-8 MB | 受虛擬記憶體限制 |
+| 生命週期 | 自動 | 手動/RAII |
+| 碎片 | 無 | 可能嚴重 |
+| 快取友善 | ✅ | ❌ |
+
+## 記憶體佈局
+
+程式記憶體從低到高：Text（程式碼）→ Data → BSS → Heap（向上）→ 自由空間 → Stack（向下）。
+
+## alignas / alignof 詳解
+
+\\\`\\\`\\\`cpp
+alignof(int);    // 通常 4
+alignof(double); // 通常 8
+
+struct alignas(64) CacheLine {
+    int data[16];  // 對齊到快取行，避免 false sharing
+};
+\\\`\\\`\\\`
+
+## 自定義 Allocator 的動機
+
+避免頻繁系統呼叫、控制碎片、池化配置、記憶體追蹤、特殊記憶體（GPU、共享記憶體）。
+
+## Pool Allocator
+
+適合大量相同大小物件。使用 free list 管理，配置/釋放都是 O(1)：
+
+\\\`\\\`\\\`cpp
+template<typename T, size_t N>
+class PoolAllocator {
+    union Block { T data; Block* next; };
+    Block pool_[N];
+    Block* free_ = nullptr;
+public:
+    PoolAllocator() {
+        for (size_t i = 0; i < N-1; ++i) pool_[i].next = &pool_[i+1];
+        pool_[N-1].next = nullptr;
+        free_ = &pool_[0];
+    }
+    T* allocate() {
+        auto* b = free_; free_ = free_->next;
+        return &b->data;
+    }
+    void deallocate(T* p) {
+        auto* b = reinterpret_cast<Block*>(p);
+        b->next = free_; free_ = b;
+    }
+};
+\\\`\\\`\\\`
+
+## Arena Allocator
+
+只配置不釋放，整體一次性銷毀。適合生命週期相同的物件（如 AST 節點）。配置極快，無碎片。
+
+## placement new 詳解
+
+\\\`\\\`\\\`cpp
+alignas(Widget) char buf[sizeof(Widget)];
+Widget* w = new (buf) Widget(args...);
+w->~Widget();  // 必須手動呼叫解構函式
+
+// C++20: std::construct_at / std::destroy_at 更安全
+\\\`\\\`\\\`
+
+## Memory-Mapped I/O
+
+將檔案映射到虛擬位址空間，用指標直接存取，由 OS 處理分頁載入。
+
+## RAII 與 PMR (C++17)
+
+\\\`\\\`\\\`cpp
+#include <memory_resource>
+std::array<char, 4096> buffer;
+std::pmr::monotonic_buffer_resource mbr(buffer.data(), buffer.size());
+std::pmr::vector<int> vec(&mbr);  // 使用棧上記憶體！
+\\\`\\\`\\\`
 `,
     codeExample: `#include <iostream>
 #include <vector>
