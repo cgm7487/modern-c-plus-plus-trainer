@@ -325,12 +325,12 @@ Range-based for 迴圈實際上是語法糖。編譯器會將它展開為：
 
 理解這個展開很重要，因為：
 - **不能在迴圈中修改容器大小**（會導致迭代器失效）
-- 容器需要提供 \\\`begin()\\\` 和 \\\`end()\\\`
+- 容器需要提供 \`begin()\` 和 \`end()\`
 - expression 只會被求值一次
 
 ## 讓自定義類別支援 Range-based for
 
-你的類別只需提供 \\\`begin()\\\` 和 \\\`end()\\\` 方法：
+你的類別只需提供 \`begin()\` 和 \`end()\` 方法：
 
 \`\`\`cpp
 class IntRange {
@@ -426,8 +426,8 @@ for (const auto& [key, value] : myMap) {
 
 ## Best Practice
 
-- 唯讀遍歷用 \\\`const auto&\\\`
-- 需要修改元素用 \\\`auto&\\\`
+- 唯讀遍歷用 \`const auto&\`
+- 需要修改元素用 \`auto&\`
 - 避免用值拷貝（除非型別很小如 int）
 - 不要在迴圈中增刪容器元素
 - 小心鏈式呼叫產生的臨時物件懸空引用
@@ -553,14 +553,14 @@ int main() {
 
 ## 捕獲列表 (Capture)
 
-- \\\`[]\\\` - 不捕獲任何變數
-- \\\`[=]\\\` - 以值捕獲所有變數
-- \\\`[&]\\\` - 以引用捕獲所有變數
-- \\\`[x]\\\` - 以值捕獲 x
-- \\\`[&x]\\\` - 以引用捕獲 x
-- \\\`[=, &x]\\\` - 全部以值捕獲，x 以引用捕獲
-- \\\`[this]\\\` - 捕獲 this 指標
-- \\\`[*this]\\\` - C++17，以值捕獲整個物件（拷貝）
+- \`[]\` - 不捕獲任何變數
+- \`[=]\` - 以值捕獲所有變數
+- \`[&]\` - 以引用捕獲所有變數
+- \`[x]\` - 以值捕獲 x
+- \`[&x]\` - 以引用捕獲 x
+- \`[=, &x]\` - 全部以值捕獲，x 以引用捕獲
+- \`[this]\` - 捕獲 this 指標
+- \`[*this]\` - C++17，以值捕獲整個物件（拷貝）
 
 ### 值捕獲 vs 引用捕獲的細節
 
@@ -594,7 +594,7 @@ std::function<int()> makeLambda() {
 
 ## mutable Lambda
 
-以值捕獲的變數預設是 const，不能修改。加上 \\\`mutable\\\` 可以修改：
+以值捕獲的變數預設是 const，不能修改。加上 \`mutable\` 可以修改：
 
 \`\`\`cpp
 int count = 0;
@@ -670,7 +670,7 @@ void process(int data, std::function<void(int)> cb) {
 - 可能觸發堆積記憶體配置（小物件最佳化除外）
 - 透過虛函式呼叫，無法內聯
 - 大小固定（通常 32-64 bytes）
-- 當 lambda 不需要型別擦除時，優先用模板或 \\\`auto\\\`
+- 當 lambda 不需要型別擦除時，優先用模板或 \`auto\`
 
 ## 立即呼叫的 Lambda (IIFE)
 
@@ -696,7 +696,7 @@ const auto value = [&]() -> int {
 
 ## 遞迴 Lambda
 
-Lambda 無法直接遞迴呼叫自身（因為 \\\`auto\\\` 尚未完成推導）。解法：
+Lambda 無法直接遞迴呼叫自身（因為 \`auto\` 尚未完成推導）。解法：
 
 \`\`\`cpp
 // 方法一：使用 std::function（有開銷）
@@ -715,8 +715,8 @@ factorial(factorial, 5); // 120
 
 - 短小的回呼函式用 lambda
 - 需要重複使用的邏輯抽成具名函式
-- 預設以 \\\`[&]\\\` 捕獲時要注意生命週期
-- 避免不必要地使用 \\\`std::function\\\`，優先用模板或 \\\`auto\\\`
+- 預設以 \`[&]\` 捕獲時要注意生命週期
+- 避免不必要地使用 \`std::function\`，優先用模板或 \`auto\`
 - 用 IIFE 進行複雜的 const 變數初始化
 - Lambda 超過 3-5 行時考慮提取成具名函式
 `,
@@ -855,11 +855,11 @@ int main() {
 ## 所有權語意 (Ownership Semantics)
 
 C++ 的資源管理核心概念是**所有權**：
-- **獨佔所有權**：同一時間只有一個擁有者 → \\\`unique_ptr\\\`
-- **共享所有權**：多個擁有者，最後一個銷毀時釋放 → \\\`shared_ptr\\\`
-- **觀察者**：不擁有資源，只是觀察 → \\\`weak_ptr\\\` 或裸指標
+- **獨佔所有權**：同一時間只有一個擁有者 → \`unique_ptr\`
+- **共享所有權**：多個擁有者，最後一個銷毀時釋放 → \`shared_ptr\`
+- **觀察者**：不擁有資源，只是觀察 → \`weak_ptr\` 或裸指標
 
-選擇智慧指標的原則：先考慮 \\\`unique_ptr\\\`，只在真正需要共享時才用 \\\`shared_ptr\\\`。
+選擇智慧指標的原則：先考慮 \`unique_ptr\`，只在真正需要共享時才用 \`shared_ptr\`。
 
 ## std::unique_ptr
 
@@ -882,7 +882,7 @@ auto sp2 = sp1; // 引用計數 +1
 
 ### 循環引用問題
 
-\\\`shared_ptr\\\` 最大的陷阱是循環引用，會導致記憶體洩漏：
+\`shared_ptr\` 最大的陷阱是循環引用，會導致記憶體洩漏：
 
 \`\`\`cpp
 struct Node {
@@ -913,7 +913,7 @@ if (auto locked = wp.lock()) {
 }
 \`\`\`
 
-\\\`weak_ptr\\\` 的典型用途：
+\`weak_ptr\` 的典型用途：
 - **打破循環引用**（如雙向連結、樹的父子關係）
 - **快取**（觀察物件是否仍存在）
 - **觀察者模式**（不延長被觀察者的生命週期）
@@ -941,7 +941,7 @@ std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)>
 
 ## make_unique / make_shared 的優勢
 
-為什麼要用 \\\`make_unique\\\` 和 \\\`make_shared\\\` 而非直接 \\\`new\\\`？
+為什麼要用 \`make_unique\` 和 \`make_shared\` 而非直接 \`new\`？
 
 \`\`\`cpp
 // 1. 異常安全
@@ -961,7 +961,7 @@ auto ptr = std::make_unique<MyLongClassName>(args);
 
 ## 別名建構子 (Aliasing Constructor)
 
-\\\`shared_ptr\\\` 的別名建構子讓你共享所有權但指向不同的物件：
+\`shared_ptr\` 的別名建構子讓你共享所有權但指向不同的物件：
 
 \`\`\`cpp
 struct Composite {
@@ -977,7 +977,7 @@ std::shared_ptr<int> dataPtr(composite, &composite->data);
 
 ## enable_shared_from_this
 
-當物件需要取得指向自身的 \\\`shared_ptr\\\` 時使用：
+當物件需要取得指向自身的 \`shared_ptr\` 時使用：
 
 \`\`\`cpp
 class Widget : public std::enable_shared_from_this<Widget> {
@@ -995,12 +995,12 @@ auto w2 = w->getPtr(); // OK
 
 ## Best Practice
 
-- 優先使用 \\\`make_unique\\\` 和 \\\`make_shared\\\`
-- 預設使用 \\\`unique_ptr\\\`，需要共享時才用 \\\`shared_ptr\\\`
+- 優先使用 \`make_unique\` 和 \`make_shared\`
+- 預設使用 \`unique_ptr\`，需要共享時才用 \`shared_ptr\`
 - 函式參數傳遞：用 raw pointer 或 reference（不轉移所有權時）
-- 永遠不要用 \\\`new\\\`/\\\`delete\\\`
-- 用 \\\`weak_ptr\\\` 打破循環引用
-- 需要從 \\\`this\\\` 取得 \\\`shared_ptr\\\` 時繼承 \\\`enable_shared_from_this\\\`
+- 永遠不要用 \`new\`/\`delete\`
+- 用 \`weak_ptr\` 打破循環引用
+- 需要從 \`this\` 取得 \`shared_ptr\` 時繼承 \`enable_shared_from_this\`
 - 自定義刪除器讓智慧指標可以管理任何資源
 `,
     codeExample: `#include <iostream>
@@ -1139,11 +1139,11 @@ int main() {
 每個 C++ 表達式都有**值類別 (value category)**：
 
 - **左值 (lvalue)**：有名稱、可取址的表達式
-  - 變數名稱、字串字面量 \\\`"hello"\\\`、回傳引用的函式呼叫
+  - 變數名稱、字串字面量 \`"hello"\`、回傳引用的函式呼叫
 - **純右值 (prvalue)**：臨時值、數值字面量
-  - \\\`42\\\`、\\\`std::string("temp")\\\`、回傳非引用型別的函式呼叫
+  - \`42\`、\`std::string("temp")\`、回傳非引用型別的函式呼叫
 - **將亡值 (xvalue)**：即將被移動的物件
-  - \\\`std::move(x)\\\` 的結果
+  - \`std::move(x)\` 的結果
 
 \`\`\`cpp
 int x = 42;
@@ -1191,7 +1191,7 @@ public:
 
 ## std::move 不會真正移動！
 
-\\\`std::move\\\` 只做型別轉換，真正的移動發生在移動建構/賦值中：
+\`std::move\` 只做型別轉換，真正的移動發生在移動建構/賦值中：
 
 \`\`\`cpp
 // std::move 的本質是 static_cast
@@ -1213,7 +1213,7 @@ std::string s2 = std::move(s1); // 真正移動在 string 移動建構
 4. 移動建構
 5. 移動賦值
 
-**Rule of Zero 更好**：用 \\\`vector\\\`、\\\`unique_ptr\\\` 等管理資源，不自定義特殊成員函式。
+**Rule of Zero 更好**：用 \`vector\`、\`unique_ptr\` 等管理資源，不自定義特殊成員函式。
 
 ## noexcept 的重要性
 
@@ -1227,7 +1227,7 @@ std::string s2 = std::move(s1); // 真正移動在 string 移動建構
 
 ## 完美轉發 (Perfect Forwarding) 簡介
 
-用**萬能引用**和 \\\`std::forward\\\` 保持參數的值類別：
+用**萬能引用**和 \`std::forward\` 保持參數的值類別：
 
 \`\`\`cpp
 template<typename T>
@@ -1259,7 +1259,7 @@ return v;            // 好！讓編譯器優化
 
 ## Best Practice
 
-- 移動操作標記為 \\\`noexcept\\\`
+- 移動操作標記為 \`noexcept\`
 - 移動後的物件應處於有效但未指定的狀態
 - 不要對 const 物件使用 std::move（無效果）
 - 不要對回傳的局部變數使用 std::move
@@ -1460,7 +1460,7 @@ void print(Args... args) {  // args: function parameter pack
 }
 \`\`\`
 
-\\\`typename... Args\\\` 宣告模板參數包，可匹配零個或多個型別。
+\`typename... Args\` 宣告模板參數包，可匹配零個或多個型別。
 
 ## sizeof... 運算子
 
@@ -1761,7 +1761,7 @@ if (auto it = scores.find("Alice"); it != scores.end()) {
 
 ## Best Practice
 
-- 搭配 \\\`const auto&\\\` 避免不必要的拷貝
+- 搭配 \`const auto&\` 避免不必要的拷貝
 - 變數名稱要有意義
 - 搭配 if init-statement 限制變數作用域
 - 綁定數量必須與成員/元素數量完全匹配
@@ -1986,21 +1986,21 @@ auto s = std::any_cast<std::string>(a);
 // 錯誤型別會拋出 std::bad_any_cast
 \`\`\`
 
-\\\`any\\\` 內部使用型別擦除，可能需要堆積配置，效能不如 \\\`variant\\\`。
+\`any\` 內部使用型別擦除，可能需要堆積配置，效能不如 \`variant\`。
 
 ## 何時使用哪一個？
 
-- **函式可能無回傳值** → \\\`optional\\\`
-- **已知固定型別集合** → \\\`variant\\\`
-- **完全未知型別** → \\\`any\\\`（盡量避免）
-- **錯誤處理** → \\\`optional\\\` 或 \\\`variant<Value, Error>\\\`
+- **函式可能無回傳值** → \`optional\`
+- **已知固定型別集合** → \`variant\`
+- **完全未知型別** → \`any\`（盡量避免）
+- **錯誤處理** → \`optional\` 或 \`variant<Value, Error>\`
 
 ## Best Practice
 
-- 優先使用 \\\`optional\\\`（明確語意）
-- \\\`variant\\\` 搭配 \\\`std::visit\\\` 使用，避免 \\\`std::get\\\` 拋出例外
-- \\\`any\\\` 盡量少用，優先考慮 \\\`variant\\\`
-- 用 \\\`value_or()\\\` 提供預設值
+- 優先使用 \`optional\`（明確語意）
+- \`variant\` 搭配 \`std::visit\` 使用，避免 \`std::get\` 拋出例外
+- \`any\` 盡量少用，優先考慮 \`variant\`
+- 用 \`value_or()\` 提供預設值
 - 使用 overloaded lambda 模式簡化 visit
 `,
     codeExample: `#include <iostream>
@@ -2397,7 +2397,7 @@ auto it = std::ranges::find(vec, 42);
 ## Views vs Actions
 
 - **Views**：惰性求值，不建立新容器，遍歷時才計算
-- **Actions**：立即求值，如 \\\`ranges::sort\\\`
+- **Actions**：立即求值，如 \`ranges::sort\`
 
 \`\`\`cpp
 // View: 惰性，不配置記憶體
@@ -2468,16 +2468,16 @@ std::vector<int> vec2(view.begin(), view.end());
 
 ## 常用 Views
 
-- \\\`filter\\\` - 過濾
-- \\\`transform\\\` - 轉換
-- \\\`take\\\` / \\\`drop\\\` - 取前/去前 N 個
-- \\\`take_while\\\` / \\\`drop_while\\\` - 條件取/去
-- \\\`reverse\\\` - 反轉
-- \\\`keys\\\` / \\\`values\\\` - map 的鍵/值
-- \\\`iota\\\` - 產生序列
-- \\\`split\\\` / \\\`join\\\` - 分割/合併
-- \\\`zip\\\` (C++23) - 配對多個範圍
-- \\\`enumerate\\\` (C++23) - 帶索引遍歷
+- \`filter\` - 過濾
+- \`transform\` - 轉換
+- \`take\` / \`drop\` - 取前/去前 N 個
+- \`take_while\` / \`drop_while\` - 條件取/去
+- \`reverse\` - 反轉
+- \`keys\` / \`values\` - map 的鍵/值
+- \`iota\` - 產生序列
+- \`split\` / \`join\` - 分割/合併
+- \`zip\` (C++23) - 配對多個範圍
+- \`enumerate\` (C++23) - 帶索引遍歷
 
 ## Ranges 版演算法的改進
 
@@ -2492,7 +2492,7 @@ std::ranges::max(people, {}, &Person::age); // 投影
 - 用管線組合取代巢狀迴圈
 - 利用惰性求值避免中間容器
 - 善用投影簡化比較邏輯
-- C++23 的 \\\`ranges::to\\\` 讓 view 到容器轉換更方便
+- C++23 的 \`ranges::to\` 讓 view 到容器轉換更方便
 `,
     codeExample: `#include <iostream>
 #include <vector>
@@ -2699,7 +2699,7 @@ RAII 自動提供至少 basic guarantee。
 
 ## RAII vs finally / defer
 
-其他語言用 \\\`finally\\\`（Java）或 \\\`defer\\\`（Go）。C++ 的 RAII 更優越：
+其他語言用 \`finally\`（Java）或 \`defer\`（Go）。C++ 的 RAII 更優越：
 
 - **自動化**：不需記得寫 finally
 - **可組合**：多個 RAII 物件按逆序銷毀
@@ -2905,7 +2905,7 @@ obj.getValue();     // OK
 // obj.setValue(10); // 編譯錯誤！
 \`\`\`
 
-const 成員函式中 \\\`this\\\` 是 \\\`const MyClass*\\\`，不能修改非 mutable 成員。
+const 成員函式中 \`this\` 是 \`const MyClass*\`，不能修改非 mutable 成員。
 
 ## mutable 關鍵字
 
@@ -2993,9 +2993,9 @@ void process(const std::vector<int>& v);
 - 能加 const 就加 const
 - 成員函式盡量標 const
 - 參數傳遞用 const reference
-- 用 \\\`mutable\\\` 處理快取和互斥鎖
-- 避免 \\\`const_cast\\\`
-- 用 \\\`constexpr\\\` 取代 const 做編譯期常數
+- 用 \`mutable\` 處理快取和互斥鎖
+- 避免 \`const_cast\`
+- 用 \`constexpr\` 取代 const 做編譯期常數
 - const 成員函式應是執行緒安全的
 `,
     codeExample: `#include <iostream>
@@ -7133,7 +7133,7 @@ C++20 採用 **stackless** 協程：記憶體輕量（只分配協程框架）�
 
 ## promise_type 自訂點詳解
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 struct promise_type {
     auto get_return_object();        // 建立回傳物件
     auto initial_suspend();          // suspend_always=惰性, suspend_never=立即
@@ -7143,7 +7143,7 @@ struct promise_type {
     auto yield_value(T);             // co_yield value;
     auto await_transform(expr);      // 自訂 co_await
 };
-\\\`\\\`\\\`
+\`\`\`
 
 ## Awaitable / Awaiter 介面
 
@@ -7496,14 +7496,14 @@ std::vector<int, PoolAllocator<int>> vec;
 
 ## alignas / alignof 詳解
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 alignof(int);    // 通常 4
 alignof(double); // 通常 8
 
 struct alignas(64) CacheLine {
     int data[16];  // 對齊到快取行，避免 false sharing
 };
-\\\`\\\`\\\`
+\`\`\`
 
 ## 自定義 Allocator 的動機
 
@@ -7513,7 +7513,7 @@ struct alignas(64) CacheLine {
 
 適合大量相同大小物件。使用 free list 管理，配置/釋放都是 O(1)：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 template<typename T, size_t N>
 class PoolAllocator {
     union Block { T data; Block* next; };
@@ -7534,7 +7534,7 @@ public:
         b->next = free_; free_ = b;
     }
 };
-\\\`\\\`\\\`
+\`\`\`
 
 ## Arena Allocator
 
@@ -7542,13 +7542,13 @@ public:
 
 ## placement new 詳解
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 alignas(Widget) char buf[sizeof(Widget)];
 Widget* w = new (buf) Widget(args...);
 w->~Widget();  // 必須手動呼叫解構函式
 
 // C++20: std::construct_at / std::destroy_at 更安全
-\\\`\\\`\\\`
+\`\`\`
 
 ## Memory-Mapped I/O
 
@@ -7556,12 +7556,12 @@ w->~Widget();  // 必須手動呼叫解構函式
 
 ## RAII 與 PMR (C++17)
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <memory_resource>
 std::array<char, 4096> buffer;
 std::pmr::monotonic_buffer_resource mbr(buffer.data(), buffer.size());
 std::pmr::vector<int> vec(&mbr);  // 使用棧上記憶體！
-\\\`\\\`\\\`
+\`\`\`
 `,
     codeExample: `#include <iostream>
 #include <vector>
