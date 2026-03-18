@@ -7799,228 +7799,269 @@ int main() {
 
 ## 什麼是 IPC？為什麼需要它？
 
-**IPC (Inter-Process Communication，進程間通訊)** 是指不同進程之間交換資料的機制。在 Unix/Linux 系統中，每個進程都有自己獨立的位址空間，無法直接存取其他進程的記憶體。因此，作業系統提供了多種 IPC 機制讓進程能夠協作：
+**IPC (Inter-Process Communication，進程間通訊)** 是指不同進程之間交換資料的機制。在 Unix/Linux 系統中，每個進程都有獨立的位址空間，作業系統提供了多種 IPC 機制讓進程能夠協作。
 
-- **管道 (Pipes)**：最簡單的 IPC 機制
-- **命名管道 (FIFO)**：具名的管道，允許無親緣關係的進程通訊
-- **共享記憶體 (Shared Memory)**：最高效的 IPC 方式
-- **Socket**：支援網路通訊的 IPC
-- **訊息佇列 (Message Queue)**：結構化的訊息傳遞
+## C++ RAII 封裝：FileDescriptor
 
-## 匿名管道 (Anonymous Pipe)
+在 C 中，管道操作依賴裸 \`int fd\`，容易忘記 \`close()\` 或在例外路徑洩漏。Modern C++ 的第一步是 RAII 封裝：
 
-### 基本概念
+\`\`\`cpp
+class FileDescriptor {
+    int fd_ = -1;
+public:
+    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
 
-匿名管道是最基本的 IPC 機制，它建立一個**單向**的通訊通道：
+    // 移動語意，不可複製
+    FileDescriptor(FileDescriptor&& other) noexcept
+        : fd_(std::exchange(other.fd_, -1)) {}
+    FileDescriptor& operator=(FileDescriptor&& other) noexcept {
+        if (this != &other) {
+            if (fd_ >= 0) ::close(fd_);
+            fd_ = std::exchange(other.fd_, -1);
+        }
+        return *this;
+    }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
 
-- 管道有兩端：**讀端 (read end)** 和 **寫端 (write end)**
-- 資料從寫端流入，從讀端流出（先進先出 FIFO）
-- 只能用於**有親緣關係**的進程（父子進程）
+    int get() const { return fd_; }
+    int release() { return std::exchange(fd_, -1); }
+    explicit operator bool() const { return fd_ >= 0; }
+};
+\`\`\`
 
-### pipe() 系統呼叫
+## 匿名管道的 C++ 封裝
+
+### C 寫法 vs C++ 寫法
+
+\`\`\`cpp
+// ❌ C 風格：裸 fd、手動 close、char buf[]
+int pipefd[2];
+pipe(pipefd);
+char buf[256];
+read(pipefd[0], buf, sizeof(buf));
+close(pipefd[0]);
+close(pipefd[1]);
+
+// ✅ C++ 風格：RAII + std::string
+auto [read_end, write_end] = make_pipe();  // 結構化綁定
+std::string data = read_all(read_end);     // 自動管理生命週期
+\`\`\`
+
+### Pipe 工廠函式
 
 \`\`\`cpp
 #include <unistd.h>
+#include <stdexcept>
+#include <system_error>
 
-int pipefd[2];
-int ret = pipe(pipefd);
-// pipefd[0] = 讀端 (read end)
-// pipefd[1] = 寫端 (write end)
-\`\`\`
+struct PipePair {
+    FileDescriptor read_end;
+    FileDescriptor write_end;
+};
 
-### 父子進程通訊流程
-
-1. 父進程呼叫 \`pipe()\` 建立管道
-2. 父進程呼叫 \`fork()\` 建立子進程
-3. 子進程繼承管道的檔案描述符
-4. 根據通訊方向，各自關閉不需要的端
-
-\`\`\`cpp
-int pipefd[2];
-pipe(pipefd);
-
-pid_t pid = fork();
-if (pid == 0) {
-    // 子進程：寫入資料
-    close(pipefd[0]);  // 關閉讀端
-    const char* msg = "Hello from child!";
-    write(pipefd[1], msg, strlen(msg));
-    close(pipefd[1]);
-} else {
-    // 父進程：讀取資料
-    close(pipefd[1]);  // 關閉寫端
-    char buf[256];
-    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
-    buf[n] = '\\0';
-    printf("Parent received: %s\\n", buf);
-    close(pipefd[0]);
+PipePair make_pipe() {
+    int fds[2];
+    if (::pipe(fds) == -1) {
+        throw std::system_error(errno, std::system_category(), "pipe");
+    }
+    return { FileDescriptor(fds[0]), FileDescriptor(fds[1]) };
 }
 \`\`\`
 
-## 命名管道 (Named Pipe / FIFO)
-
-### 與匿名管道的差異
-
-| 特性 | 匿名管道 | 命名管道 (FIFO) |
-|------|---------|----------------|
-| 建立方式 | pipe() | mkfifo() 或命令列 mkfifo |
-| 可見性 | 只在進程內 | 檔案系統中有路徑名稱 |
-| 通訊對象 | 有親緣關係的進程 | 任何進程 |
-| 生命週期 | 隨進程結束 | 直到被刪除 |
-
-### 使用 mkfifo
+### 型別安全的讀寫
 
 \`\`\`cpp
-#include <sys/stat.h>
+// 用 std::span (C++20) 取代 void* + size_t
+void pipe_write(const FileDescriptor& fd, std::span<const std::byte> data) {
+    ssize_t n = ::write(fd.get(), data.data(), data.size());
+    if (n == -1) throw std::system_error(errno, std::system_category());
+}
 
-// 建立命名管道
-mkfifo("/tmp/myfifo", 0666);
+// 用 std::string 取代 char buf[]
+std::string pipe_read(const FileDescriptor& fd, size_t max_size = 4096) {
+    std::string buf(max_size, '\\0');
+    ssize_t n = ::read(fd.get(), buf.data(), buf.size());
+    if (n == -1) throw std::system_error(errno, std::system_category());
+    buf.resize(n);
+    return buf;
+}
 
-// 寫端進程
-int fd = open("/tmp/myfifo", O_WRONLY);
-write(fd, "Hello FIFO!", 11);
-close(fd);
+// 方便函式：直接讀寫 string
+void pipe_write(const FileDescriptor& fd, std::string_view msg) {
+    pipe_write(fd, std::as_bytes(std::span(msg.data(), msg.size())));
+}
+\`\`\`
 
-// 讀端進程
-int fd = open("/tmp/myfifo", O_RDONLY);
-char buf[256];
-read(fd, buf, sizeof(buf));
-close(fd);
+## 父子進程通訊（C++ 風格）
 
-// 用完後刪除
-unlink("/tmp/myfifo");
+\`\`\`cpp
+int main() {
+    auto [read_end, write_end] = make_pipe();
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // 子進程：寫入
+        read_end = {};  // RAII 自動 close 讀端
+        pipe_write(write_end, "Hello from child!");
+        return 0;       // write_end 離開 scope 自動 close
+    }
+
+    // 父進程：讀取
+    write_end = {};     // RAII 自動 close 寫端
+    std::string msg = pipe_read(read_end);
+    std::cout << "Parent received: " << msg << "\\n";
+    wait(nullptr);
+}
+\`\`\`
+
+## 命名管道 (FIFO) + C++ RAII
+
+### FIFO 的 RAII 管理
+
+\`\`\`cpp
+class ScopedFifo {
+    std::string path_;
+public:
+    explicit ScopedFifo(std::string_view path, mode_t mode = 0666)
+        : path_(path)
+    {
+        if (::mkfifo(path_.c_str(), mode) == -1 && errno != EEXIST)
+            throw std::system_error(errno, std::system_category());
+    }
+    ~ScopedFifo() { ::unlink(path_.c_str()); }
+
+    const std::string& path() const { return path_; }
+
+    ScopedFifo(const ScopedFifo&) = delete;
+    ScopedFifo& operator=(const ScopedFifo&) = delete;
+};
+
+// 使用
+{
+    ScopedFifo fifo("/tmp/myfifo");
+    // ... 讀寫操作 ...
+}  // 離開 scope 自動 unlink
 \`\`\`
 
 ## 管道的緩衝與阻塞行為
 
-- **寫入空管道**：如果沒有讀端開啟，寫入會產生 SIGPIPE 信號
-- **讀取空管道**：如果沒有資料且寫端仍開啟，read() 會**阻塞**
-- **管道滿時**：write() 會**阻塞**直到有空間（Linux 預設管道大小為 65536 bytes）
-- **所有寫端關閉**：read() 返回 0（表示 EOF）
+- 寫入無讀端的管道 → \`SIGPIPE\` 信號
+- 讀取空管道（寫端仍開） → 阻塞等待
+- 管道滿時寫入 → 阻塞（Linux 預設 64KB）
+- 所有寫端關閉 → \`read()\` 返回 0 (EOF)
 
-## 雙向通訊：使用兩個管道
+## C 風格 vs C++ 風格對比
 
-由於管道是單向的，雙向通訊需要**兩個管道**：
-
-\`\`\`cpp
-int pipe_parent_to_child[2];  // 父→子
-int pipe_child_to_parent[2];  // 子→父
-
-pipe(pipe_parent_to_child);
-pipe(pipe_child_to_parent);
-
-pid_t pid = fork();
-if (pid == 0) {
-    // 子進程
-    close(pipe_parent_to_child[1]);  // 關閉寫端
-    close(pipe_child_to_parent[0]);  // 關閉讀端
-    
-    // 從父進程讀取
-    char buf[256];
-    read(pipe_parent_to_child[0], buf, sizeof(buf));
-    
-    // 回覆父進程
-    write(pipe_child_to_parent[1], "Got it!", 7);
-    
-    close(pipe_parent_to_child[0]);
-    close(pipe_child_to_parent[1]);
-} else {
-    // 父進程
-    close(pipe_parent_to_child[0]);  // 關閉讀端
-    close(pipe_child_to_parent[1]);  // 關閉寫端
-    
-    // 發送給子進程
-    write(pipe_parent_to_child[1], "Hello!", 6);
-    
-    // 從子進程讀取回覆
-    char buf[256];
-    read(pipe_child_to_parent[0], buf, sizeof(buf));
-    
-    close(pipe_parent_to_child[1]);
-    close(pipe_child_to_parent[0]);
-}
-\`\`\`
-
-## 實際應用
-
-- **Shell 管道**：\`ls | grep .cpp\` 就是用管道連接兩個進程
-- **進程間資料流**：一個進程產生資料，另一個處理
-- **日誌收集**：子進程的輸出透過管道傳給父進程記錄
-- **CGI 程式**：Web 伺服器透過管道與 CGI 程式通訊
+- \`close(fd)\` → \`FileDescriptor\` RAII 自動管理
+- \`char buf[256]\` → \`std::string\` / \`std::vector<std::byte>\`
+- \`perror("pipe")\` → \`throw std::system_error(errno, ...)\`
+- 手動 \`unlink()\` → \`ScopedFifo\` 析構時自動清理
+- \`memcpy\` → \`std::span\` + \`std::copy\`
 `,
     codeExample: `#include <iostream>
+#include <string>
+#include <utility>
+#include <span>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <cstring>
-#include <string>
+#include <system_error>
 
-// 父子進程透過管道通訊
-int main() {
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        perror("pipe");
-        return 1;
+// RAII 封裝檔案描述符
+class FileDescriptor {
+    int fd_ = -1;
+public:
+    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
+    FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    FileDescriptor& operator=(FileDescriptor&& o) noexcept {
+        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        return *this;
     }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
+    int get() const { return fd_; }
+};
+
+struct PipePair { FileDescriptor read_end, write_end; };
+
+PipePair make_pipe() {
+    int fds[2];
+    if (::pipe(fds) == -1)
+        throw std::system_error(errno, std::system_category(), "pipe");
+    return { FileDescriptor(fds[0]), FileDescriptor(fds[1]) };
+}
+
+void pipe_write(const FileDescriptor& fd, std::string_view msg) {
+    uint32_t len = msg.size();
+    ::write(fd.get(), &len, sizeof(len));
+    ::write(fd.get(), msg.data(), len);
+}
+
+std::string pipe_read_msg(const FileDescriptor& fd) {
+    uint32_t len = 0;
+    if (::read(fd.get(), &len, sizeof(len)) != sizeof(len)) return {};
+    std::string buf(len, '\\0');
+    ::read(fd.get(), buf.data(), len);
+    return buf;
+}
+
+int main() {
+    auto [read_end, write_end] = make_pipe();
 
     pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork");
-        return 1;
-    }
-
     if (pid == 0) {
-        // 子進程：寫入資料
-        close(pipefd[0]);  // 關閉讀端
-
-        std::string messages[] = {
-            "Hello from child!",
-            "Message 2",
-            "Message 3"
-        };
-
-        for (const auto& msg : messages) {
-            // 先寫入訊息長度，再寫入訊息內容
-            uint32_t len = msg.size();
-            write(pipefd[1], &len, sizeof(len));
-            write(pipefd[1], msg.c_str(), len);
+        read_end = {};  // RAII close 讀端
+        for (auto msg : {"Hello from child!", "Message 2", "Message 3"}) {
+            pipe_write(write_end, msg);
         }
-
-        close(pipefd[1]);  // 關閉寫端，通知父進程 EOF
-        return 0;
-    } else {
-        // 父進程：讀取資料
-        close(pipefd[1]);  // 關閉寫端
-
-        uint32_t len;
-        while (read(pipefd[0], &len, sizeof(len)) == sizeof(len)) {
-            std::string msg(len, '\\0');
-            read(pipefd[0], &msg[0], len);
-            std::cout << "Parent received: " << msg << std::endl;
-        }
-
-        close(pipefd[0]);
-        wait(nullptr);  // 等待子進程結束
-        std::cout << "Communication complete" << std::endl;
+        return 0;  // write_end RAII close
     }
 
-    return 0;
+    write_end = {};  // RAII close 寫端
+    while (auto msg = pipe_read_msg(read_end); !msg.empty()) {
+        std::cout << "Parent received: " << msg << "\\n";
+    }
+    wait(nullptr);
+    std::cout << "Communication complete\\n";
 }`,
     exercise: {
-      title: '雙向管道通訊練習',
-      description: '實作父子進程之間的雙向通訊：\n1. 父進程從 stdin 讀取一個整數 N\n2. 父進程透過管道發送 N 給子進程\n3. 子進程計算 N 的階乘 (N!)\n4. 子進程透過另一個管道將結果傳回父進程\n5. 父進程輸出結果',
+      title: '雙向管道通訊練習（C++ RAII）',
+      description: '使用 RAII FileDescriptor 封裝實作父子進程雙向通訊：\n1. 父進程從 stdin 讀取整數 N\n2. 透過管道發送 N 給子進程\n3. 子進程計算 N! 後透過另一管道回傳\n4. 全程使用 RAII 管理 fd，不需手動 close',
       starterCode: `#include <iostream>
+#include <utility>
 #include <unistd.h>
 #include <sys/wait.h>
 
+class FileDescriptor {
+    int fd_ = -1;
+public:
+    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
+    FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    FileDescriptor& operator=(FileDescriptor&& o) noexcept {
+        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        return *this;
+    }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
+    int get() const { return fd_; }
+};
+
+struct PipePair { FileDescriptor read_end, write_end; };
+
+PipePair make_pipe() {
+    int fds[2];
+    ::pipe(fds);
+    return { FileDescriptor(fds[0]), FileDescriptor(fds[1]) };
+}
+
 int main() {
-    int pipe1[2];  // 父 -> 子
-    int pipe2[2];  // 子 -> 父
-
-    // TODO: 建立兩個管道
+    // TODO: 建立兩個 PipePair (parent_to_child, child_to_parent)
     // TODO: fork 子進程
-    // TODO: 子進程從 pipe1 讀取 N，計算 N!，寫入 pipe2
-    // TODO: 父進程讀取 N，寫入 pipe1，從 pipe2 讀取結果
-
+    // TODO: 子進程讀取 N，計算 N!，寫回
+    // TODO: 父進程讀取 N，發送，接收結果並輸出
     return 0;
 }`,
       testCases: [
@@ -8029,62 +8070,71 @@ int main() {
         { input: '1', expectedOutput: '1' }
       ],
       hints: [
-        '記得在 fork 後關閉不需要的管道端',
-        '使用 read/write 傳遞整數時，傳遞 &n 和 sizeof(n)',
-        '階乘計算：long long factorial = 1; for (int i = 2; i <= n; ++i) factorial *= i;',
-        '父進程要先寫入再讀取，子進程要先讀取再寫入'
+        '用 make_pipe() 建立兩組 PipePair',
+        '賦值空的 FileDescriptor{} 來關閉不需要的端',
+        '用 ::write(fd.get(), &n, sizeof(n)) 傳遞整數',
+        '離開 scope 時 FileDescriptor 自動 close'
       ],
       solution: `#include <iostream>
+#include <utility>
 #include <unistd.h>
 #include <sys/wait.h>
 
-int main() {
-    int pipe1[2];  // 父 -> 子
-    int pipe2[2];  // 子 -> 父
+class FileDescriptor {
+    int fd_ = -1;
+public:
+    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
+    FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    FileDescriptor& operator=(FileDescriptor&& o) noexcept {
+        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        return *this;
+    }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
+    int get() const { return fd_; }
+};
 
-    pipe(pipe1);
-    pipe(pipe2);
+struct PipePair { FileDescriptor read_end, write_end; };
+
+PipePair make_pipe() {
+    int fds[2];
+    ::pipe(fds);
+    return { FileDescriptor(fds[0]), FileDescriptor(fds[1]) };
+}
+
+int main() {
+    auto p2c = make_pipe();  // parent -> child
+    auto c2p = make_pipe();  // child -> parent
 
     pid_t pid = fork();
-
     if (pid == 0) {
-        // 子進程
-        close(pipe1[1]);  // 關閉 pipe1 寫端
-        close(pipe2[0]);  // 關閉 pipe2 讀端
+        p2c.write_end = {};  // 關閉不需要的端
+        c2p.read_end = {};
 
         int n;
-        read(pipe1[0], &n, sizeof(n));
-        close(pipe1[0]);
+        ::read(p2c.read_end.get(), &n, sizeof(n));
+        p2c.read_end = {};
 
         long long factorial = 1;
-        for (int i = 2; i <= n; ++i) {
-            factorial *= i;
-        }
+        for (int i = 2; i <= n; ++i) factorial *= i;
 
-        write(pipe2[1], &factorial, sizeof(factorial));
-        close(pipe2[1]);
-        return 0;
-    } else {
-        // 父進程
-        close(pipe1[0]);  // 關閉 pipe1 讀端
-        close(pipe2[1]);  // 關閉 pipe2 寫端
-
-        int n;
-        std::cin >> n;
-
-        write(pipe1[1], &n, sizeof(n));
-        close(pipe1[1]);
-
-        long long result;
-        read(pipe2[0], &result, sizeof(result));
-        close(pipe2[0]);
-
-        std::cout << result << std::endl;
-
-        wait(nullptr);
+        ::write(c2p.write_end.get(), &factorial, sizeof(factorial));
+        return 0;  // RAII 自動 close
     }
 
-    return 0;
+    p2c.read_end = {};
+    c2p.write_end = {};
+
+    int n;
+    std::cin >> n;
+    ::write(p2c.write_end.get(), &n, sizeof(n));
+    p2c.write_end = {};
+
+    long long result;
+    ::read(c2p.read_end.get(), &result, sizeof(result));
+    std::cout << result << std::endl;
+    wait(nullptr);
 }`
     }
   },
@@ -8098,300 +8148,305 @@ int main() {
 
 ## 共享記憶體概述
 
-共享記憶體是最快速的 IPC 機制，因為資料不需要在核心空間和使用者空間之間複製。多個進程可以將同一塊實體記憶體映射到各自的虛擬位址空間中，直接讀寫。
+共享記憶體是最快速的 IPC 機制 — 零拷貝，多個進程直接讀寫同一塊實體記憶體。但 C 風格的 API (\`shm_open\`, \`mmap\`, \`sem_t\`) 容易忘記釋放資源。Modern C++ 可以用 RAII 和 C++20 的 \`std::counting_semaphore\` 大幅改善。
 
-**優點**：
-- 零拷貝，效能最高
-- 適合大量資料傳輸
+## C++ RAII 封裝：SharedMemory
 
-**缺點**：
-- 需要額外的同步機制（如信號量）
-- 程式設計較複雜
-
-## POSIX 共享記憶體
-
-### 核心 API
+### C 風格的 7 步流程太容易出錯
 
 \`\`\`cpp
-#include <sys/mman.h>
-#include <fcntl.h>
-
-// 1. 建立/開啟共享記憶體物件
-int fd = shm_open("/my_shm", O_CREAT | O_RDWR, 0666);
-
-// 2. 設定大小
-ftruncate(fd, sizeof(SharedData));
-
-// 3. 映射到進程位址空間
-void* ptr = mmap(NULL, sizeof(SharedData),
-                 PROT_READ | PROT_WRITE,
-                 MAP_SHARED, fd, 0);
-
-// 4. 使用共享記憶體
-SharedData* data = static_cast<SharedData*>(ptr);
-data->value = 42;
-
-// 5. 解除映射
-munmap(ptr, sizeof(SharedData));
-
-// 6. 關閉檔案描述符
+// ❌ C 風格：7 個步驟，每個都可能遺漏
+int fd = shm_open("/name", O_CREAT | O_RDWR, 0666);
+ftruncate(fd, size);
+void* ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 close(fd);
-
-// 7. 刪除共享記憶體物件（最後使用的進程負責）
-shm_unlink("/my_shm");
+// ... 使用 ...
+munmap(ptr, size);
+shm_unlink("/name");  // 常常忘記！
 \`\`\`
 
-### 共享記憶體結構設計
+### C++ RAII 封裝
 
 \`\`\`cpp
-struct SharedData {
-    int counter;
-    char message[256];
-    bool ready;
+template<typename T>
+class SharedMemory {
+    T* ptr_ = nullptr;
+    std::string name_;
+    bool owner_;  // 是否負責 unlink
+
+public:
+    // 建立共享記憶體（owner 負責 unlink）
+    SharedMemory(std::string_view name, bool create = false)
+        : name_(name), owner_(create)
+    {
+        int flags = O_RDWR | (create ? O_CREAT : 0);
+        int fd = ::shm_open(name_.c_str(), flags, 0666);
+        if (fd == -1)
+            throw std::system_error(errno, std::system_category());
+
+        if (create) ::ftruncate(fd, sizeof(T));
+
+        void* p = ::mmap(nullptr, sizeof(T),
+                         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+
+        if (p == MAP_FAILED)
+            throw std::system_error(errno, std::system_category());
+
+        ptr_ = static_cast<T*>(p);
+        if (create) new (ptr_) T{};  // placement new 初始化
+    }
+
+    ~SharedMemory() {
+        if (ptr_) {
+            if (owner_) ptr_->~T();
+            ::munmap(ptr_, sizeof(T));
+            if (owner_) ::shm_unlink(name_.c_str());
+        }
+    }
+
+    T* operator->() { return ptr_; }
+    T& operator*() { return *ptr_; }
+
+    // 移動語意
+    SharedMemory(SharedMemory&& o) noexcept
+        : ptr_(std::exchange(o.ptr_, nullptr)),
+          name_(std::move(o.name_)),
+          owner_(std::exchange(o.owner_, false)) {}
+    SharedMemory(const SharedMemory&) = delete;
 };
 \`\`\`
 
-## System V 共享記憶體
-
-較舊的 API，但仍廣泛使用：
+### 使用方式
 
 \`\`\`cpp
-#include <sys/ipc.h>
-#include <sys/shm.h>
+struct GameState {
+    std::atomic<int> score{0};
+    std::atomic<bool> running{true};
+};
 
-// 建立
-key_t key = ftok("/tmp/shmfile", 65);
-int shmid = shmget(key, sizeof(SharedData), 0666 | IPC_CREAT);
+// 進程 A（owner）
+{
+    SharedMemory<GameState> state("/game", true);
+    state->score.store(100);
+}  // 自動 munmap + shm_unlink
 
-// 附加
-void* ptr = shmat(shmid, NULL, 0);
-
-// 分離
-shmdt(ptr);
-
-// 刪除
-shmctl(shmid, IPC_RMID, NULL);
+// 進程 B（reader）
+{
+    SharedMemory<GameState> state("/game", false);
+    int s = state->score.load();
+}  // 自動 munmap（不 unlink）
 \`\`\`
 
-## POSIX 信號量
+## C++20 Semaphore vs POSIX sem_t
 
-信號量用於控制多個進程對共享資源的存取。
-
-### 具名信號量 (Named Semaphore)
-
-適用於**不同進程**之間的同步：
+C++20 提供了標準的信號量，取代 POSIX \`sem_t\`：
 
 \`\`\`cpp
-#include <semaphore.h>
+#include <semaphore>
 
-// 建立/開啟具名信號量
+// ❌ C 風格 POSIX 信號量
 sem_t* sem = sem_open("/my_sem", O_CREAT, 0666, 1);
-// 初始值為 1 = 二元信號量（互斥鎖）
-
-// 等待（P 操作）：值 > 0 則減 1 並返回，否則阻塞
 sem_wait(sem);
-
-// 臨界區操作...
-
-// 釋放（V 操作）：值加 1，喚醒一個等待的進程
 sem_post(sem);
-
-// 關閉
 sem_close(sem);
-
-// 刪除（最後一個使用者負責）
 sem_unlink("/my_sem");
+
+// ✅ C++20 信號量（單進程/多執行緒）
+std::binary_semaphore sem{1};     // 二元信號量
+std::counting_semaphore<10> cs{5}; // 計數信號量
+
+sem.acquire();    // 等同 sem_wait
+sem.release();    // 等同 sem_post
+
+// 帶超時的 acquire
+if (sem.try_acquire_for(std::chrono::seconds(5))) {
+    // 在時限內取得
+}
 \`\`\`
 
-### 無名信號量 (Unnamed Semaphore)
+## std::atomic：共享記憶體的最佳搭檔
 
-適用於**共享記憶體中**的進程同步：
+對於簡單的共享狀態，\`std::atomic\` 可以完全取代信號量：
 
 \`\`\`cpp
-struct SharedData {
-    sem_t sem;
-    int value;
+struct SharedCounter {
+    std::atomic<int> count{0};
+    std::atomic<bool> done{false};
 };
 
-// 在共享記憶體中初始化
-// 第二個參數 1 表示進程間共享
-sem_init(&shared->sem, 1, 1);
+// 進程 A
+shared->count.fetch_add(1, std::memory_order_relaxed);
 
-// 使用
-sem_wait(&shared->sem);
-shared->value++;
-sem_post(&shared->sem);
-
-// 銷毀
-sem_destroy(&shared->sem);
+// 進程 B
+int val = shared->count.load(std::memory_order_relaxed);
 \`\`\`
 
-## 共享記憶體 + 信號量：完整模式
-
-### 生產者-消費者模式
+## 生產者-消費者（C++ 風格）
 
 \`\`\`cpp
-struct SharedBuffer {
-    sem_t mutex;      // 互斥鎖
-    sem_t full;       // 已填充的槽位數
-    sem_t empty;      // 空閒的槽位數
-    int buffer[10];   // 環形緩衝區
-    int in;           // 寫入位置
-    int out;          // 讀取位置
+template<typename T, size_t N>
+struct SharedRingBuffer {
+    std::array<T, N> buffer{};
+    std::atomic<size_t> head{0};  // 寫入位置
+    std::atomic<size_t> tail{0};  // 讀取位置
+
+    bool try_push(const T& val) {
+        size_t h = head.load(std::memory_order_relaxed);
+        size_t next = (h + 1) % N;
+        if (next == tail.load(std::memory_order_acquire))
+            return false;  // 滿了
+        buffer[h] = val;
+        head.store(next, std::memory_order_release);
+        return true;
+    }
+
+    bool try_pop(T& val) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        if (t == head.load(std::memory_order_acquire))
+            return false;  // 空的
+        val = buffer[t];
+        tail.store((t + 1) % N, std::memory_order_release);
+        return true;
+    }
 };
 
-// 生產者
-sem_wait(&buf->empty);   // 等待空閒槽位
-sem_wait(&buf->mutex);   // 進入臨界區
-buf->buffer[buf->in] = item;
-buf->in = (buf->in + 1) % 10;
-sem_post(&buf->mutex);   // 離開臨界區
-sem_post(&buf->full);    // 增加已填充計數
-
-// 消費者
-sem_wait(&buf->full);    // 等待已填充槽位
-sem_wait(&buf->mutex);   // 進入臨界區
-int item = buf->buffer[buf->out];
-buf->out = (buf->out + 1) % 10;
-sem_post(&buf->mutex);   // 離開臨界區
-sem_post(&buf->empty);   // 增加空閒計數
+// 搭配 SharedMemory 使用
+SharedMemory<SharedRingBuffer<int, 64>> buf("/ring", true);
+buf->try_push(42);
 \`\`\`
 
-## 記憶體映射檔案 (Memory-Mapped Files)
+## C 風格 vs C++ 風格對比
 
-\`mmap\` 也可以用於映射一般檔案，實現檔案的高效存取：
-
-\`\`\`cpp
-// 映射檔案
-int fd = open("data.bin", O_RDWR);
-struct stat st;
-fstat(fd, &st);
-
-void* ptr = mmap(NULL, st.st_size,
-                 PROT_READ | PROT_WRITE,
-                 MAP_SHARED, fd, 0);
-
-// 直接操作記憶體 = 操作檔案
-memcpy(ptr, data, size);
-
-// 同步到磁碟
-msync(ptr, st.st_size, MS_SYNC);
-
-munmap(ptr, st.st_size);
-close(fd);
-\`\`\`
-
-## 實際應用模式
-
-- **資料庫引擎**：使用共享記憶體做快取池
-- **高頻交易**：進程間低延遲資料傳遞
-- **多進程伺服器**：共享設定和狀態
-- **科學計算**：大型資料集的進程間共享
-- **遊戲引擎**：多進程架構中共享遊戲狀態
+- \`shm_open + mmap + munmap + shm_unlink\` → \`SharedMemory<T>\` RAII
+- \`sem_t + sem_wait + sem_post\` → \`std::counting_semaphore\` / \`std::atomic\`
+- \`char message[256]\` → \`std::array<char, 256>\`
+- \`memcpy(ptr, data, size)\` → \`std::copy\` / \`std::span\`
+- 手動錯誤檢查 → \`throw std::system_error\`
 
 ## 注意事項
 
-1. **同步是必須的**：共享記憶體本身不提供同步，必須搭配信號量或其他同步機制
-2. **記憶體對齊**：共享結構體要注意記憶體對齊
-3. **清理資源**：使用 shm_unlink 和 sem_unlink 避免資源洩漏
-4. **錯誤處理**：每個系統呼叫都應檢查返回值
-5. **編譯旗標**：需要加上 \`-lrt -lpthread\` 連結選項
+1. 共享記憶體中的物件**不能包含指標**（不同進程的虛擬位址不同）
+2. 使用 \`std::atomic\` 或信號量做同步
+3. 結構體要注意 \`alignas\` 對齊
+4. 編譯旗標：\`-lrt -lpthread\`
 `,
     codeExample: `#include <iostream>
-#include <cstring>
+#include <atomic>
+#include <string>
+#include <string_view>
+#include <array>
+#include <utility>
+#include <system_error>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <semaphore.h>
 
+// RAII 共享記憶體封裝
+template<typename T>
+class SharedMemory {
+    T* ptr_ = nullptr;
+    std::string name_;
+    bool owner_;
+public:
+    SharedMemory(std::string_view name, bool create = false)
+        : name_(name), owner_(create) {
+        int flags = O_RDWR | (create ? O_CREAT : 0);
+        int fd = ::shm_open(name_.c_str(), flags, 0666);
+        if (fd == -1) throw std::system_error(errno, std::system_category());
+        if (create) ::ftruncate(fd, sizeof(T));
+        void* p = ::mmap(nullptr, sizeof(T), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+        if (p == MAP_FAILED) throw std::system_error(errno, std::system_category());
+        ptr_ = static_cast<T*>(p);
+        if (create) new (ptr_) T{};
+    }
+    ~SharedMemory() {
+        if (ptr_) { ::munmap(ptr_, sizeof(T)); if (owner_) ::shm_unlink(name_.c_str()); }
+    }
+    T* operator->() { return ptr_; }
+    SharedMemory(SharedMemory&&) = default;
+    SharedMemory(const SharedMemory&) = delete;
+};
+
+// 用 std::atomic 取代 POSIX sem_t
 struct SharedData {
-    sem_t sem;
-    int counter;
-    char message[256];
+    std::atomic<int> counter{0};
+    std::array<char, 256> message{};
 };
 
 int main() {
-    const char* shm_name = "/demo_shm";
-    const int SHM_SIZE = sizeof(SharedData);
-
-    // 建立共享記憶體
-    int fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    ftruncate(fd, SHM_SIZE);
-
-    // 映射
-    SharedData* shared = static_cast<SharedData*>(
-        mmap(NULL, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-    );
-    close(fd);
-
-    // 初始化信號量（進程間共享，初始值 1）
-    sem_init(&shared->sem, 1, 1);
-    shared->counter = 0;
-    std::strcpy(shared->message, "Initial");
+    // 建立共享記憶體（RAII 自動管理生命週期）
+    SharedMemory<SharedData> shared("/demo_shm", true);
+    auto msg = "Initial";
+    std::copy(msg, msg + 8, shared->message.begin());
 
     pid_t pid = fork();
-
     if (pid == 0) {
-        // 子進程：遞增計數器 1000 次
-        for (int i = 0; i < 1000; ++i) {
-            sem_wait(&shared->sem);
-            shared->counter++;
-            sem_post(&shared->sem);
-        }
+        // 子進程：原子遞增 1000 次（不需要信號量！）
+        for (int i = 0; i < 1000; ++i)
+            shared->counter.fetch_add(1, std::memory_order_relaxed);
 
-        sem_wait(&shared->sem);
-        std::strcpy(shared->message, "Updated by child");
-        sem_post(&shared->sem);
-
-        munmap(shared, SHM_SIZE);
+        auto child_msg = "Updated by child";
+        std::copy(child_msg, child_msg + 17, shared->message.begin());
         return 0;
-    } else {
-        // 父進程：也遞增計數器 1000 次
-        for (int i = 0; i < 1000; ++i) {
-            sem_wait(&shared->sem);
-            shared->counter++;
-            sem_post(&shared->sem);
-        }
-
-        wait(nullptr);  // 等待子進程結束
-
-        sem_wait(&shared->sem);
-        std::cout << "Counter: " << shared->counter << std::endl;
-        std::cout << "Message: " << shared->message << std::endl;
-        sem_post(&shared->sem);
-
-        // 清理
-        sem_destroy(&shared->sem);
-        munmap(shared, SHM_SIZE);
-        shm_unlink(shm_name);
     }
 
-    return 0;
+    // 父進程
+    for (int i = 0; i < 1000; ++i)
+        shared->counter.fetch_add(1, std::memory_order_relaxed);
+
+    wait(nullptr);
+    std::cout << "Counter: " << shared->counter.load() << "\\n";
+    std::cout << "Message: " << shared->message.data() << "\\n";
+    // shared 離開 scope → munmap + shm_unlink 自動清理
 }`,
     exercise: {
-      title: '共享計數器練習',
-      description: '實作父子進程之間的共享計數器：\n1. 建立 POSIX 共享記憶體，包含一個計數器和一個信號量\n2. 父進程讀取 N，然後 fork 子進程\n3. 父進程將計數器加 N 次（每次加 1）\n4. 子進程也將計數器加 N 次（每次加 1）\n5. 等待子進程結束後，輸出最終計數器值（應為 2*N）',
+      title: '共享記憶體 RAII 練習',
+      description: '使用 RAII SharedMemory 封裝和 std::atomic 實作共享計數器：\n1. 建立共享記憶體，包含 atomic<int> 計數器\n2. 父進程讀取 N，fork 子進程\n3. 父子各自 atomic 加 N 次\n4. 輸出最終值（應為 2*N）\n\n不需要信號量！std::atomic 保證原子性。',
       starterCode: `#include <iostream>
+#include <atomic>
+#include <system_error>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <semaphore.h>
 
-struct SharedData {
-    sem_t sem;
-    int counter;
+template<typename T>
+class SharedMemory {
+    T* ptr_ = nullptr;
+    std::string name_;
+    bool owner_;
+public:
+    SharedMemory(std::string_view name, bool create = false)
+        : name_(name), owner_(create) {
+        int flags = O_RDWR | (create ? O_CREAT : 0);
+        int fd = ::shm_open(name_.c_str(), flags, 0666);
+        if (fd == -1) throw std::system_error(errno, std::system_category());
+        if (create) ::ftruncate(fd, sizeof(T));
+        void* p = ::mmap(nullptr, sizeof(T), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+        ptr_ = static_cast<T*>(p);
+        if (create) new (ptr_) T{};
+    }
+    ~SharedMemory() {
+        if (ptr_) { ::munmap(ptr_, sizeof(T)); if (owner_) ::shm_unlink(name_.c_str()); }
+    }
+    T* operator->() { return ptr_; }
+};
+
+struct SharedCounter {
+    std::atomic<int> count{0};
 };
 
 int main() {
     int n;
     std::cin >> n;
 
-    // TODO: 建立共享記憶體
-    // TODO: 映射並初始化 SharedData
+    // TODO: 建立 SharedMemory<SharedCounter>
     // TODO: fork 子進程
-    // TODO: 父子進程各加 N 次
+    // TODO: 父子各用 fetch_add 加 N 次
     // TODO: 輸出最終結果
 
     return 0;
@@ -8402,66 +8457,64 @@ int main() {
         { input: '1', expectedOutput: '2' }
       ],
       hints: [
-        'shm_open 搭配 O_CREAT | O_RDWR 建立共享記憶體',
-        'ftruncate 設定共享記憶體大小為 sizeof(SharedData)',
-        'sem_init 第二個參數設為 1 表示進程間共享',
-        '每次遞增前 sem_wait，遞增後 sem_post',
-        '編譯時加上 -lrt -lpthread'
+        'SharedMemory<SharedCounter> shm("/name", true) 建立共享記憶體',
+        'shm->count.fetch_add(1) 原子遞增',
+        'shm->count.load() 讀取最終值',
+        '不需要 sem_t！std::atomic 已提供原子保證'
       ],
       solution: `#include <iostream>
+#include <atomic>
+#include <system_error>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <semaphore.h>
 
-struct SharedData {
-    sem_t sem;
-    int counter;
+template<typename T>
+class SharedMemory {
+    T* ptr_ = nullptr;
+    std::string name_;
+    bool owner_;
+public:
+    SharedMemory(std::string_view name, bool create = false)
+        : name_(name), owner_(create) {
+        int flags = O_RDWR | (create ? O_CREAT : 0);
+        int fd = ::shm_open(name_.c_str(), flags, 0666);
+        if (fd == -1) throw std::system_error(errno, std::system_category());
+        if (create) ::ftruncate(fd, sizeof(T));
+        void* p = ::mmap(nullptr, sizeof(T), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        ::close(fd);
+        ptr_ = static_cast<T*>(p);
+        if (create) new (ptr_) T{};
+    }
+    ~SharedMemory() {
+        if (ptr_) { ::munmap(ptr_, sizeof(T)); if (owner_) ::shm_unlink(name_.c_str()); }
+    }
+    T* operator->() { return ptr_; }
+};
+
+struct SharedCounter {
+    std::atomic<int> count{0};
 };
 
 int main() {
     int n;
     std::cin >> n;
 
-    const char* shm_name = "/exercise_shm";
-    int fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    ftruncate(fd, sizeof(SharedData));
-
-    SharedData* shared = static_cast<SharedData*>(
-        mmap(NULL, sizeof(SharedData), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-    );
-    close(fd);
-
-    sem_init(&shared->sem, 1, 1);
-    shared->counter = 0;
+    SharedMemory<SharedCounter> shm("/exercise_shm", true);
 
     pid_t pid = fork();
-
     if (pid == 0) {
-        for (int i = 0; i < n; ++i) {
-            sem_wait(&shared->sem);
-            shared->counter++;
-            sem_post(&shared->sem);
-        }
-        munmap(shared, sizeof(SharedData));
+        for (int i = 0; i < n; ++i)
+            shm->count.fetch_add(1, std::memory_order_relaxed);
         return 0;
-    } else {
-        for (int i = 0; i < n; ++i) {
-            sem_wait(&shared->sem);
-            shared->counter++;
-            sem_post(&shared->sem);
-        }
-
-        wait(nullptr);
-        std::cout << shared->counter << std::endl;
-
-        sem_destroy(&shared->sem);
-        munmap(shared, sizeof(SharedData));
-        shm_unlink(shm_name);
     }
 
-    return 0;
+    for (int i = 0; i < n; ++i)
+        shm->count.fetch_add(1, std::memory_order_relaxed);
+
+    wait(nullptr);
+    std::cout << shm->count.load() << std::endl;
 }`
     }
   },
@@ -8475,339 +8528,335 @@ int main() {
 
 ## Socket 概述
 
-Socket（套接字）是最通用的 IPC 機制，不僅可以用於同一台機器上的進程間通訊，還可以跨網路通訊。
+Socket 是最通用的 IPC 機制，支援本機和跨網路通訊。C 風格的 Socket API 充斥著裸 \`int fd\`、\`struct sockaddr*\` 強制轉型、手動 \`close()\`。Modern C++ 可以用 RAII、\`std::string\`、例外處理大幅改善。
 
-### Socket 類型
-
-| 類型 | 說明 | 適用場景 |
-|------|------|---------|
-| Unix Domain Socket | 本機進程間通訊，使用檔案路徑作為位址 | 高效本機 IPC |
-| TCP Socket | 面向連線的可靠傳輸 | 網路通訊、客戶端-伺服器 |
-| UDP Socket | 無連線的資料報傳輸 | 即時通訊、串流媒體 |
-
-## Socket API 核心函式
+## C++ RAII Socket 封裝
 
 \`\`\`cpp
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+class Socket {
+    int fd_ = -1;
+public:
+    explicit Socket(int domain, int type, int protocol = 0)
+        : fd_(::socket(domain, type, protocol)) {
+        if (fd_ == -1)
+            throw std::system_error(errno, std::system_category(), "socket");
+    }
+    explicit Socket(int fd) : fd_(fd) {}
+    ~Socket() { if (fd_ >= 0) ::close(fd_); }
 
-// 建立 socket
+    // 移動語意
+    Socket(Socket&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    Socket& operator=(Socket&& o) noexcept {
+        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        return *this;
+    }
+    Socket(const Socket&) = delete;
+    Socket& operator=(const Socket&) = delete;
+
+    int get() const { return fd_; }
+
+    // 發送 string_view（取代 char* + strlen）
+    void send(std::string_view data) const {
+        ::send(fd_, data.data(), data.size(), 0);
+    }
+
+    // 接收為 string（取代 char buf[1024]）
+    std::string recv(size_t max_size = 4096) const {
+        std::string buf(max_size, '\\0');
+        ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
+        if (n <= 0) return {};
+        buf.resize(n);
+        return buf;
+    }
+};
+\`\`\`
+
+## TCP Server 封裝
+
+\`\`\`cpp
+class TcpServer {
+    Socket sock_;
+public:
+    TcpServer(uint16_t port, int backlog = 5)
+        : sock_(AF_INET, SOCK_STREAM)
+    {
+        int opt = 1;
+        setsockopt(sock_.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+
+        if (::bind(sock_.get(), reinterpret_cast<sockaddr*>(&addr),
+                   sizeof(addr)) == -1)
+            throw std::system_error(errno, std::system_category(), "bind");
+        if (::listen(sock_.get(), backlog) == -1)
+            throw std::system_error(errno, std::system_category(), "listen");
+    }
+
+    // 接受連線，回傳 RAII Socket
+    Socket accept() {
+        int fd = ::accept(sock_.get(), nullptr, nullptr);
+        if (fd == -1)
+            throw std::system_error(errno, std::system_category(), "accept");
+        return Socket(fd);
+    }
+};
+\`\`\`
+
+## C 風格 vs C++ 風格對比
+
+\`\`\`cpp
+// ❌ C 風格：裸 fd、手動 close、char buf[]、perror
 int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-// AF_INET: IPv4, AF_UNIX: Unix Domain
-// SOCK_STREAM: TCP, SOCK_DGRAM: UDP
-
-// 伺服器端
-bind(sockfd, addr, addrlen);      // 綁定位址
-listen(sockfd, backlog);          // 開始監聽
-int client = accept(sockfd, ...); // 接受連線
-
-// 客戶端
-connect(sockfd, addr, addrlen);   // 連線到伺服器
-
-// 資料傳輸
-send(sockfd, buf, len, flags);    // 發送
-recv(sockfd, buf, len, flags);    // 接收
-
-// 關閉
-close(sockfd);
-\`\`\`
-
-## TCP 客戶端-伺服器模型
-
-### 伺服器端流程
-
-\`\`\`cpp
-// 1. 建立 socket
-int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-
-// 2. 設定 SO_REUSEADDR（避免 "Address already in use"）
-int opt = 1;
-setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-// 3. 綁定位址
-struct sockaddr_in addr;
-addr.sin_family = AF_INET;
-addr.sin_addr.s_addr = INADDR_ANY;
-addr.sin_port = htons(8080);
-bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
-
-// 4. 開始監聽
-listen(server_fd, 5);
-
-// 5. 接受連線
-struct sockaddr_in client_addr;
-socklen_t client_len = sizeof(client_addr);
-int client_fd = accept(server_fd,
-    (struct sockaddr*)&client_addr, &client_len);
-
-// 6. 收發資料
 char buf[1024];
-ssize_t n = recv(client_fd, buf, sizeof(buf), 0);
-send(client_fd, buf, n, 0);  // echo back
-
-// 7. 關閉
-close(client_fd);
-close(server_fd);
-\`\`\`
-
-### 客戶端流程
-
-\`\`\`cpp
-// 1. 建立 socket
-int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-// 2. 連線到伺服器
-struct sockaddr_in addr;
-addr.sin_family = AF_INET;
-addr.sin_port = htons(8080);
-inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-
-// 3. 收發資料
-send(sockfd, "Hello", 5, 0);
-char buf[1024];
-recv(sockfd, buf, sizeof(buf), 0);
-
-// 4. 關閉
+ssize_t n = recv(sockfd, buf, sizeof(buf), 0);
+if (n == -1) { perror("recv"); close(sockfd); return -1; }
 close(sockfd);
+
+// ✅ C++ 風格：RAII + string + exception
+Socket sock(AF_INET, SOCK_STREAM);
+std::string data = sock.recv();  // 自動管理緩衝區
+// sock 離開 scope 自動 close
 \`\`\`
 
-## Unix Domain Socket
-
-用於同一台機器的高效 IPC，比 TCP 快（無需經過網路協定棧）：
+## TCP 客戶端（C++ 風格）
 
 \`\`\`cpp
-#include <sys/un.h>
+Socket connect_to(std::string_view host, uint16_t port) {
+    Socket sock(AF_INET, SOCK_STREAM);
 
-// 伺服器
-int server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, host.data(), &addr.sin_addr);
 
-struct sockaddr_un addr;
-addr.sun_family = AF_UNIX;
-strncpy(addr.sun_path, "/tmp/my_socket", sizeof(addr.sun_path) - 1);
-unlink("/tmp/my_socket");  // 確保路徑不存在
+    if (::connect(sock.get(), reinterpret_cast<sockaddr*>(&addr),
+                  sizeof(addr)) == -1)
+        throw std::system_error(errno, std::system_category(), "connect");
+    return sock;  // 移動語意回傳
+}
 
-bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
-listen(server_fd, 5);
-
-// 客戶端
-int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+// 使用
+auto client = connect_to("127.0.0.1", 8080);
+client.send("Hello, Server!");
+auto reply = client.recv();
+// client 離開 scope 自動 close
 \`\`\`
 
-## 非阻塞 Socket 與 I/O 多工
-
-### select / poll / epoll
-
-處理多個客戶端連線時，有三種主要方式：
+## 型別安全的訊息協議
 
 \`\`\`cpp
-// 1. select（跨平台，但有 FD_SETSIZE 限制）
-fd_set readfds;
-FD_ZERO(&readfds);
-FD_SET(server_fd, &readfds);
-select(max_fd + 1, &readfds, NULL, NULL, &timeout);
-
-// 2. poll（無 fd 數量限制）
-struct pollfd fds[MAX_CLIENTS];
-fds[0].fd = server_fd;
-fds[0].events = POLLIN;
-poll(fds, nfds, timeout_ms);
-
-// 3. epoll（Linux 專用，最高效）
-int epfd = epoll_create1(0);
-struct epoll_event ev;
-ev.events = EPOLLIN;
-ev.data.fd = server_fd;
-epoll_ctl(epfd, EPOLL_CTL_ADD, server_fd, &ev);
-
-struct epoll_event events[MAX_EVENTS];
-int n = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
-\`\`\`
-
-## 簡單的通訊協議設計
-
-在 TCP 上傳輸資料時，需要處理**訊息邊界**問題（TCP 是位元組流）：
-
-\`\`\`cpp
-// 方法 1：固定長度標頭 + 變長資料
+// C++ 結構化協議（取代 char buf + 手動解析）
 struct MessageHeader {
-    uint32_t length;  // 資料部分的長度
-    uint16_t type;    // 訊息類型
+    uint32_t length;
+    uint16_t type;
 };
 
-// 發送
-void send_message(int fd, uint16_t type,
-                  const void* data, uint32_t len) {
-    MessageHeader hdr = {htonl(len), htons(type)};
-    send(fd, &hdr, sizeof(hdr), 0);
-    send(fd, data, len, 0);
+// 泛型發送：任何可序列化的 trivially_copyable 型別
+template<typename T>
+    requires std::is_trivially_copyable_v<T>
+void send_message(const Socket& sock, uint16_t type, const T& data) {
+    MessageHeader hdr{htonl(sizeof(T)), htons(type)};
+    ::send(sock.get(), &hdr, sizeof(hdr), 0);
+    ::send(sock.get(), &data, sizeof(data), 0);
 }
 
-// 方法 2：分隔符號（如換行符）
-// 適合文字協議，如 HTTP、SMTP
+// string_view 版本
+void send_message(const Socket& sock, uint16_t type,
+                  std::string_view data) {
+    MessageHeader hdr{htonl(static_cast<uint32_t>(data.size())),
+                      htons(type)};
+    ::send(sock.get(), &hdr, sizeof(hdr), 0);
+    ::send(sock.get(), data.data(), data.size(), 0);
+}
 \`\`\`
 
-## 錯誤處理
+## 多執行緒伺服器（C++ 風格）
 
 \`\`\`cpp
-// 每個系統呼叫都應檢查錯誤
-int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-if (sockfd == -1) {
-    perror("socket");
-    return -1;
-}
+void echo_server(uint16_t port) {
+    TcpServer server(port);
 
-if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-    perror("connect");
-    close(sockfd);
-    return -1;
-}
-
-// recv 返回 0 表示對端關閉連線
-ssize_t n = recv(sockfd, buf, sizeof(buf), 0);
-if (n == 0) {
-    // 連線已關閉
-} else if (n == -1) {
-    perror("recv");
+    std::vector<std::jthread> workers;
+    while (true) {
+        auto client = server.accept();
+        // 每個連線一個 jthread（自動 join）
+        workers.emplace_back([c = std::move(client)]() {
+            while (auto msg = c.recv(); !msg.empty()) {
+                c.send("Echo: " + msg);
+            }
+        });
+    }
 }
 \`\`\`
 
-## 實際應用
+## 改善方向總結
 
-- **Web 伺服器**：Nginx、Apache 使用 epoll/kqueue 處理大量連線
-- **資料庫**：MySQL、PostgreSQL 使用 Socket 接受客戶端連線
-- **微服務通訊**：gRPC 基於 HTTP/2 (TCP Socket)
-- **容器通訊**：Docker daemon 使用 Unix Domain Socket
-- **Redis**：支援 TCP 和 Unix Domain Socket 兩種連線方式
-
-## 編譯注意事項
-
-Socket 程式通常不需要額外的連結旗標（Linux 上）。但如果使用了 pthread，需要加 \`-pthread\`。
+- \`int sockfd\` → \`Socket\` RAII class
+- \`char buf[1024]\` → \`std::string\` / \`std::string_view\`
+- \`perror + return -1\` → \`throw std::system_error\`
+- \`(struct sockaddr*)\` 強制轉型 → \`reinterpret_cast\` 明確意圖
+- 手動 \`close()\` → 解構函式自動管理
+- \`pthread_create\` → \`std::jthread\`（C++20 自動 join）
 `,
     codeExample: `#include <iostream>
-#include <cstring>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <system_error>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
-// TCP Echo Server/Client 示範
-// 使用 fork 在同一程式中同時運行 server 和 client
-
-void run_server(int port, int num_clients) {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
-
-    bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
-    listen(server_fd, 5);
-
-    for (int i = 0; i < num_clients; ++i) {
-        int client_fd = accept(server_fd, nullptr, nullptr);
-
-        char buf[1024];
-        ssize_t n = recv(client_fd, buf, sizeof(buf) - 1, 0);
-        if (n > 0) {
-            buf[n] = '\0';
-            std::cout << "Server received: " << buf << std::endl;
-
-            // Echo back with prefix
-            std::string reply = std::string("Echo: ") + buf;
-            send(client_fd, reply.c_str(), reply.size(), 0);
-        }
-        close(client_fd);
+// RAII Socket
+class Socket {
+    int fd_ = -1;
+public:
+    explicit Socket(int domain, int type, int proto = 0)
+        : fd_(::socket(domain, type, proto)) {
+        if (fd_ == -1) throw std::system_error(errno, std::system_category());
     }
+    explicit Socket(int fd) : fd_(fd) {}
+    ~Socket() { if (fd_ >= 0) ::close(fd_); }
+    Socket(Socket&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    Socket& operator=(Socket&& o) noexcept {
+        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        return *this;
+    }
+    Socket(const Socket&) = delete;
+    int get() const { return fd_; }
+    void send(std::string_view data) const { ::send(fd_, data.data(), data.size(), 0); }
+    std::string recv(size_t max = 4096) const {
+        std::string buf(max, '\\0');
+        ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
+        buf.resize(n > 0 ? n : 0);
+        return buf;
+    }
+};
 
-    close(server_fd);
-}
+// RAII TCP Server
+class TcpServer {
+    Socket sock_;
+public:
+    TcpServer(uint16_t port) : sock_(AF_INET, SOCK_STREAM) {
+        int opt = 1;
+        setsockopt(sock_.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+        ::bind(sock_.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        ::listen(sock_.get(), 5);
+    }
+    Socket accept() { return Socket(::accept(sock_.get(), nullptr, nullptr)); }
+};
 
-void run_client(int port, const std::string& message) {
-    usleep(100000);  // 等待 server 啟動
-
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-    struct sockaddr_in addr{};
+Socket connect_to(std::string_view host, uint16_t port) {
+    Socket sock(AF_INET, SOCK_STREAM);
+    sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-    connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-    send(sockfd, message.c_str(), message.size(), 0);
-
-    char buf[1024];
-    ssize_t n = recv(sockfd, buf, sizeof(buf) - 1, 0);
-    if (n > 0) {
-        buf[n] = '\0';
-        std::cout << "Client received: " << buf << std::endl;
-    }
-
-    close(sockfd);
+    inet_pton(AF_INET, host.data(), &addr.sin_addr);
+    ::connect(sock.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    return sock;
 }
 
 int main() {
-    const int PORT = 9876;
-
+    const uint16_t PORT = 9876;
     pid_t pid = fork();
 
     if (pid == 0) {
-        // 子進程作為 client
-        run_client(PORT, "Hello, Server!");
+        usleep(100000);
+        // Client: RAII Socket，用 string 收發
+        auto client = connect_to("127.0.0.1", PORT);
+        client.send("Hello, Server!");
+        std::cout << "Client received: " << client.recv() << "\\n";
         return 0;
-    } else {
-        // 父進程作為 server
-        run_server(PORT, 1);
-        wait(nullptr);
     }
 
-    return 0;
+    // Server: RAII 管理，accept 回傳 Socket 物件
+    TcpServer server(PORT);
+    auto conn = server.accept();
+    auto msg = conn.recv();
+    std::cout << "Server received: " << msg << "\\n";
+    conn.send("Echo: " + msg);
+    wait(nullptr);
 }`,
     exercise: {
-      title: 'Socket 計算服務練習',
-      description: '實作一個簡單的 TCP 計算伺服器：\n1. 伺服器監聽指定 port\n2. 客戶端發送兩個整數（以空格分隔）\n3. 伺服器計算兩數之和，將結果回傳\n4. 客戶端收到結果後輸出\n\n使用 fork 讓 server 和 client 在同一程式中運行。\n從 stdin 讀取兩個整數。',
+      title: 'RAII Socket 計算服務練習',
+      description: '使用 RAII Socket 封裝實作 TCP 計算伺服器：\n1. 用 TcpServer 類別監聽 port\n2. 客戶端發送兩個整數（空格分隔）\n3. 伺服器計算和，回傳結果\n4. 全程使用 Socket RAII，不需手動 close',
       starterCode: `#include <iostream>
-#include <cstring>
 #include <string>
+#include <utility>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
-void run_server(int port) {
-    // TODO: 建立 TCP server
-    // TODO: 接受連線，讀取兩個數字，計算和，回傳結果
-}
+class Socket {
+    int fd_ = -1;
+public:
+    explicit Socket(int domain, int type, int proto = 0)
+        : fd_(::socket(domain, type, proto)) {}
+    explicit Socket(int fd) : fd_(fd) {}
+    ~Socket() { if (fd_ >= 0) ::close(fd_); }
+    Socket(Socket&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    Socket(const Socket&) = delete;
+    int get() const { return fd_; }
+    void send(std::string_view data) const { ::send(fd_, data.data(), data.size(), 0); }
+    std::string recv(size_t max = 4096) const {
+        std::string buf(max, '\\0');
+        ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
+        buf.resize(n > 0 ? n : 0);
+        return buf;
+    }
+};
 
-void run_client(int port, int a, int b) {
-    // TODO: 連線到 server
-    // TODO: 發送 "a b"，接收並輸出結果
+class TcpServer {
+    Socket sock_;
+public:
+    TcpServer(uint16_t port) : sock_(AF_INET, SOCK_STREAM) {
+        int opt = 1;
+        setsockopt(sock_.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+        ::bind(sock_.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        ::listen(sock_.get(), 5);
+    }
+    Socket accept() { return Socket(::accept(sock_.get(), nullptr, nullptr)); }
+};
+
+Socket connect_to(std::string_view host, uint16_t port) {
+    Socket sock(AF_INET, SOCK_STREAM);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, host.data(), &addr.sin_addr);
+    ::connect(sock.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    return sock;
 }
 
 int main() {
     int a, b;
     std::cin >> a >> b;
+    const uint16_t PORT = 9877;
 
-    const int PORT = 9877;
     pid_t pid = fork();
-
     if (pid == 0) {
         usleep(100000);
-        run_client(PORT, a, b);
+        // TODO: 連線到 server，發送 "a b"，接收並輸出結果
         return 0;
-    } else {
-        run_server(PORT);
-        wait(nullptr);
     }
-
+    // TODO: 用 TcpServer 接受連線
+    // TODO: 接收字串，解析兩個整數，計算和，回傳結果
+    wait(nullptr);
     return 0;
 }`,
       testCases: [
@@ -8816,90 +8865,87 @@ int main() {
         { input: '-10 10', expectedOutput: '0' }
       ],
       hints: [
-        '伺服器用 socket + bind + listen + accept',
-        '記得設定 SO_REUSEADDR 避免位址佔用錯誤',
-        '客戶端用 socket + connect，記得 usleep 等 server 啟動',
-        '用 std::to_string 將數字轉成字串發送',
-        '用 std::stoi 或 sscanf 解析收到的字串'
+        'TcpServer server(PORT) 建立伺服器',
+        'auto conn = server.accept() 接受連線',
+        'conn.recv() 回傳 std::string',
+        '用 std::stoi 或 sscanf 解析收到的字串',
+        'conn.send(std::to_string(sum)) 回傳結果'
       ],
       solution: `#include <iostream>
-#include <cstring>
 #include <string>
+#include <utility>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
-void run_server(int port) {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+class Socket {
+    int fd_ = -1;
+public:
+    explicit Socket(int domain, int type, int proto = 0)
+        : fd_(::socket(domain, type, proto)) {}
+    explicit Socket(int fd) : fd_(fd) {}
+    ~Socket() { if (fd_ >= 0) ::close(fd_); }
+    Socket(Socket&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
+    Socket(const Socket&) = delete;
+    int get() const { return fd_; }
+    void send(std::string_view data) const { ::send(fd_, data.data(), data.size(), 0); }
+    std::string recv(size_t max = 4096) const {
+        std::string buf(max, '\\0');
+        ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
+        buf.resize(n > 0 ? n : 0);
+        return buf;
+    }
+};
 
-    struct sockaddr_in addr{};
+class TcpServer {
+    Socket sock_;
+public:
+    TcpServer(uint16_t port) : sock_(AF_INET, SOCK_STREAM) {
+        int opt = 1;
+        setsockopt(sock_.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(port);
+        ::bind(sock_.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        ::listen(sock_.get(), 5);
+    }
+    Socket accept() { return Socket(::accept(sock_.get(), nullptr, nullptr)); }
+};
+
+Socket connect_to(std::string_view host, uint16_t port) {
+    Socket sock(AF_INET, SOCK_STREAM);
+    sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
-
-    bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
-    listen(server_fd, 5);
-
-    int client_fd = accept(server_fd, nullptr, nullptr);
-
-    char buf[1024];
-    ssize_t n = recv(client_fd, buf, sizeof(buf) - 1, 0);
-    buf[n] = '\\0';
-
-    int a, b;
-    sscanf(buf, "%d %d", &a, &b);
-    int sum = a + b;
-
-    std::string result = std::to_string(sum);
-    send(client_fd, result.c_str(), result.size(), 0);
-
-    close(client_fd);
-    close(server_fd);
-}
-
-void run_client(int port, int a, int b) {
-    usleep(100000);
-
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-    connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-
-    std::string msg = std::to_string(a) + " " + std::to_string(b);
-    send(sockfd, msg.c_str(), msg.size(), 0);
-
-    char buf[1024];
-    ssize_t n = recv(sockfd, buf, sizeof(buf) - 1, 0);
-    buf[n] = '\\0';
-    std::cout << buf << std::endl;
-
-    close(sockfd);
+    inet_pton(AF_INET, host.data(), &addr.sin_addr);
+    ::connect(sock.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    return sock;
 }
 
 int main() {
     int a, b;
     std::cin >> a >> b;
+    const uint16_t PORT = 9877;
 
-    const int PORT = 9877;
     pid_t pid = fork();
-
     if (pid == 0) {
-        run_client(PORT, a, b);
+        usleep(100000);
+        auto client = connect_to("127.0.0.1", PORT);
+        client.send(std::to_string(a) + " " + std::to_string(b));
+        std::cout << client.recv() << std::endl;
         return 0;
-    } else {
-        run_server(PORT);
-        wait(nullptr);
     }
 
-    return 0;
+    TcpServer server(PORT);
+    auto conn = server.accept();
+    auto msg = conn.recv();
+    int x, y;
+    sscanf(msg.c_str(), "%d %d", &x, &y);
+    conn.send(std::to_string(x + y));
+    wait(nullptr);
 }`
     }
   },
