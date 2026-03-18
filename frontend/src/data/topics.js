@@ -7819,23 +7819,23 @@ int main() {
 
 ### pipe() 系統呼叫
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <unistd.h>
 
 int pipefd[2];
 int ret = pipe(pipefd);
 // pipefd[0] = 讀端 (read end)
 // pipefd[1] = 寫端 (write end)
-\\\`\\\`\\\`
+\`\`\`
 
 ### 父子進程通訊流程
 
-1. 父進程呼叫 \\\`pipe()\\\` 建立管道
-2. 父進程呼叫 \\\`fork()\\\` 建立子進程
+1. 父進程呼叫 \`pipe()\` 建立管道
+2. 父進程呼叫 \`fork()\` 建立子進程
 3. 子進程繼承管道的檔案描述符
 4. 根據通訊方向，各自關閉不需要的端
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 int pipefd[2];
 pipe(pipefd);
 
@@ -7855,7 +7855,7 @@ if (pid == 0) {
     printf("Parent received: %s\\n", buf);
     close(pipefd[0]);
 }
-\\\`\\\`\\\`
+\`\`\`
 
 ## 命名管道 (Named Pipe / FIFO)
 
@@ -7870,7 +7870,7 @@ if (pid == 0) {
 
 ### 使用 mkfifo
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <sys/stat.h>
 
 // 建立命名管道
@@ -7889,7 +7889,7 @@ close(fd);
 
 // 用完後刪除
 unlink("/tmp/myfifo");
-\\\`\\\`\\\`
+\`\`\`
 
 ## 管道的緩衝與阻塞行為
 
@@ -7902,7 +7902,7 @@ unlink("/tmp/myfifo");
 
 由於管道是單向的，雙向通訊需要**兩個管道**：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 int pipe_parent_to_child[2];  // 父→子
 int pipe_child_to_parent[2];  // 子→父
 
@@ -7939,11 +7939,11 @@ if (pid == 0) {
     close(pipe_parent_to_child[1]);
     close(pipe_child_to_parent[0]);
 }
-\\\`\\\`\\\`
+\`\`\`
 
 ## 實際應用
 
-- **Shell 管道**：\\\`ls | grep .cpp\\\` 就是用管道連接兩個進程
+- **Shell 管道**：\`ls | grep .cpp\` 就是用管道連接兩個進程
 - **進程間資料流**：一個進程產生資料，另一個處理
 - **日誌收集**：子進程的輸出透過管道傳給父進程記錄
 - **CGI 程式**：Web 伺服器透過管道與 CGI 程式通訊
@@ -8112,7 +8112,7 @@ int main() {
 
 ### 核心 API
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <sys/mman.h>
 #include <fcntl.h>
 
@@ -8139,23 +8139,23 @@ close(fd);
 
 // 7. 刪除共享記憶體物件（最後使用的進程負責）
 shm_unlink("/my_shm");
-\\\`\\\`\\\`
+\`\`\`
 
 ### 共享記憶體結構設計
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 struct SharedData {
     int counter;
     char message[256];
     bool ready;
 };
-\\\`\\\`\\\`
+\`\`\`
 
 ## System V 共享記憶體
 
 較舊的 API，但仍廣泛使用：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
@@ -8171,7 +8171,7 @@ shmdt(ptr);
 
 // 刪除
 shmctl(shmid, IPC_RMID, NULL);
-\\\`\\\`\\\`
+\`\`\`
 
 ## POSIX 信號量
 
@@ -8181,7 +8181,7 @@ shmctl(shmid, IPC_RMID, NULL);
 
 適用於**不同進程**之間的同步：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <semaphore.h>
 
 // 建立/開啟具名信號量
@@ -8201,13 +8201,13 @@ sem_close(sem);
 
 // 刪除（最後一個使用者負責）
 sem_unlink("/my_sem");
-\\\`\\\`\\\`
+\`\`\`
 
 ### 無名信號量 (Unnamed Semaphore)
 
 適用於**共享記憶體中**的進程同步：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 struct SharedData {
     sem_t sem;
     int value;
@@ -8224,13 +8224,13 @@ sem_post(&shared->sem);
 
 // 銷毀
 sem_destroy(&shared->sem);
-\\\`\\\`\\\`
+\`\`\`
 
 ## 共享記憶體 + 信號量：完整模式
 
 ### 生產者-消費者模式
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 struct SharedBuffer {
     sem_t mutex;      // 互斥鎖
     sem_t full;       // 已填充的槽位數
@@ -8255,13 +8255,13 @@ int item = buf->buffer[buf->out];
 buf->out = (buf->out + 1) % 10;
 sem_post(&buf->mutex);   // 離開臨界區
 sem_post(&buf->empty);   // 增加空閒計數
-\\\`\\\`\\\`
+\`\`\`
 
 ## 記憶體映射檔案 (Memory-Mapped Files)
 
-\\\`mmap\\\` 也可以用於映射一般檔案，實現檔案的高效存取：
+\`mmap\` 也可以用於映射一般檔案，實現檔案的高效存取：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 映射檔案
 int fd = open("data.bin", O_RDWR);
 struct stat st;
@@ -8279,7 +8279,7 @@ msync(ptr, st.st_size, MS_SYNC);
 
 munmap(ptr, st.st_size);
 close(fd);
-\\\`\\\`\\\`
+\`\`\`
 
 ## 實際應用模式
 
@@ -8295,7 +8295,7 @@ close(fd);
 2. **記憶體對齊**：共享結構體要注意記憶體對齊
 3. **清理資源**：使用 shm_unlink 和 sem_unlink 避免資源洩漏
 4. **錯誤處理**：每個系統呼叫都應檢查返回值
-5. **編譯旗標**：需要加上 \\\`-lrt -lpthread\\\` 連結選項
+5. **編譯旗標**：需要加上 \`-lrt -lpthread\` 連結選項
 `,
     codeExample: `#include <iostream>
 #include <cstring>
@@ -8487,7 +8487,7 @@ Socket（套接字）是最通用的 IPC 機制，不僅可以用於同一台機
 
 ## Socket API 核心函式
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -8511,13 +8511,13 @@ recv(sockfd, buf, len, flags);    // 接收
 
 // 關閉
 close(sockfd);
-\\\`\\\`\\\`
+\`\`\`
 
 ## TCP 客戶端-伺服器模型
 
 ### 伺服器端流程
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 1. 建立 socket
 int server_fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -8549,11 +8549,11 @@ send(client_fd, buf, n, 0);  // echo back
 // 7. 關閉
 close(client_fd);
 close(server_fd);
-\\\`\\\`\\\`
+\`\`\`
 
 ### 客戶端流程
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 1. 建立 socket
 int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -8571,13 +8571,13 @@ recv(sockfd, buf, sizeof(buf), 0);
 
 // 4. 關閉
 close(sockfd);
-\\\`\\\`\\\`
+\`\`\`
 
 ## Unix Domain Socket
 
 用於同一台機器的高效 IPC，比 TCP 快（無需經過網路協定棧）：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 #include <sys/un.h>
 
 // 伺服器
@@ -8594,7 +8594,7 @@ listen(server_fd, 5);
 // 客戶端
 int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
 connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-\\\`\\\`\\\`
+\`\`\`
 
 ## 非阻塞 Socket 與 I/O 多工
 
@@ -8602,7 +8602,7 @@ connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
 
 處理多個客戶端連線時，有三種主要方式：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 1. select（跨平台，但有 FD_SETSIZE 限制）
 fd_set readfds;
 FD_ZERO(&readfds);
@@ -8624,13 +8624,13 @@ epoll_ctl(epfd, EPOLL_CTL_ADD, server_fd, &ev);
 
 struct epoll_event events[MAX_EVENTS];
 int n = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
-\\\`\\\`\\\`
+\`\`\`
 
 ## 簡單的通訊協議設計
 
 在 TCP 上傳輸資料時，需要處理**訊息邊界**問題（TCP 是位元組流）：
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 方法 1：固定長度標頭 + 變長資料
 struct MessageHeader {
     uint32_t length;  // 資料部分的長度
@@ -8647,11 +8647,11 @@ void send_message(int fd, uint16_t type,
 
 // 方法 2：分隔符號（如換行符）
 // 適合文字協議，如 HTTP、SMTP
-\\\`\\\`\\\`
+\`\`\`
 
 ## 錯誤處理
 
-\\\`\\\`\\\`cpp
+\`\`\`cpp
 // 每個系統呼叫都應檢查錯誤
 int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 if (sockfd == -1) {
@@ -8672,7 +8672,7 @@ if (n == 0) {
 } else if (n == -1) {
     perror("recv");
 }
-\\\`\\\`\\\`
+\`\`\`
 
 ## 實際應用
 
@@ -8684,7 +8684,7 @@ if (n == 0) {
 
 ## 編譯注意事項
 
-Socket 程式通常不需要額外的連結旗標（Linux 上）。但如果使用了 pthread，需要加 \\\`-pthread\\\`。
+Socket 程式通常不需要額外的連結旗標（Linux 上）。但如果使用了 pthread，需要加 \`-pthread\`。
 `,
     codeExample: `#include <iostream>
 #include <cstring>
