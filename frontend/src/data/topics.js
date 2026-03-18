@@ -7801,9 +7801,40 @@ int main() {
 
 **IPC (Inter-Process Communication，進程間通訊)** 是指不同進程之間交換資料的機制。在 Unix/Linux 系統中，每個進程都有獨立的位址空間，作業系統提供了多種 IPC 機制讓進程能夠協作。
 
-## C++ RAII 封裝：FileDescriptor
+## 純 C 寫法：pipe() 系統呼叫
 
-在 C 中，管道操作依賴裸 \`int fd\`，容易忘記 \`close()\` 或在例外路徑洩漏。Modern C++ 的第一步是 RAII 封裝：
+先看傳統 C 寫法，理解底層 API：
+
+\`\`\`cpp
+// 純 C 寫法：管道建立與父子進程通訊
+int pipefd[2];
+pipe(pipefd);  // pipefd[0]=讀端, pipefd[1]=寫端
+
+pid_t pid = fork();
+if (pid == 0) {
+    close(pipefd[0]);  // 子進程關閉讀端
+    const char* msg = "Hello from child!";
+    write(pipefd[1], msg, strlen(msg));
+    close(pipefd[1]);
+} else {
+    close(pipefd[1]);  // 父進程關閉寫端
+    char buf[256];
+    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    buf[n] = '\\0';
+    printf("Received: %s\\n", buf);
+    close(pipefd[0]);
+    wait(NULL);
+}
+\`\`\`
+
+### C 寫法的問題
+
+1. **資源洩漏風險**：忘記 \`close()\` 是常見的 bug，尤其在錯誤路徑
+2. **例外不安全**：如果中間發生例外，後面的 \`close()\` 不會執行
+3. **型別不安全**：\`void*\` 緩衝區沒有型別檢查
+4. **錯誤處理繁瑣**：每個呼叫都要手動檢查返回值
+
+## Modern C++ 改進：RAII 封裝
 
 \`\`\`cpp
 class FileDescriptor {
@@ -7812,7 +7843,7 @@ public:
     explicit FileDescriptor(int fd = -1) : fd_(fd) {}
     ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
 
-    // 移動語意，不可複製
+    // 移動語意，不可複製（像 unique_ptr）
     FileDescriptor(FileDescriptor&& other) noexcept
         : fd_(std::exchange(other.fd_, -1)) {}
     FileDescriptor& operator=(FileDescriptor&& other) noexcept {
@@ -7827,59 +7858,30 @@ public:
 
     int get() const { return fd_; }
     int release() { return std::exchange(fd_, -1); }
-    explicit operator bool() const { return fd_ >= 0; }
 };
 \`\`\`
 
-## 匿名管道的 C++ 封裝
-
-### C 寫法 vs C++ 寫法
+### Pipe 工廠 + 結構化綁定
 
 \`\`\`cpp
-// ❌ C 風格：裸 fd、手動 close、char buf[]
-int pipefd[2];
-pipe(pipefd);
-char buf[256];
-read(pipefd[0], buf, sizeof(buf));
-close(pipefd[0]);
-close(pipefd[1]);
-
-// ✅ C++ 風格：RAII + std::string
-auto [read_end, write_end] = make_pipe();  // 結構化綁定
-std::string data = read_all(read_end);     // 自動管理生命週期
-\`\`\`
-
-### Pipe 工廠函式
-
-\`\`\`cpp
-#include <unistd.h>
-#include <stdexcept>
-#include <system_error>
-
-struct PipePair {
-    FileDescriptor read_end;
-    FileDescriptor write_end;
-};
+struct PipePair { FileDescriptor read_end, write_end; };
 
 PipePair make_pipe() {
     int fds[2];
-    if (::pipe(fds) == -1) {
+    if (::pipe(fds) == -1)
         throw std::system_error(errno, std::system_category(), "pipe");
-    }
     return { FileDescriptor(fds[0]), FileDescriptor(fds[1]) };
 }
 \`\`\`
 
-### 型別安全的讀寫
+### 型別安全的讀寫函式
 
 \`\`\`cpp
-// 用 std::span (C++20) 取代 void* + size_t
-void pipe_write(const FileDescriptor& fd, std::span<const std::byte> data) {
-    ssize_t n = ::write(fd.get(), data.data(), data.size());
-    if (n == -1) throw std::system_error(errno, std::system_category());
+void pipe_write(const FileDescriptor& fd, std::string_view msg) {
+    if (::write(fd.get(), msg.data(), msg.size()) == -1)
+        throw std::system_error(errno, std::system_category());
 }
 
-// 用 std::string 取代 char buf[]
 std::string pipe_read(const FileDescriptor& fd, size_t max_size = 4096) {
     std::string buf(max_size, '\\0');
     ssize_t n = ::read(fd.get(), buf.data(), buf.size());
@@ -7887,62 +7889,68 @@ std::string pipe_read(const FileDescriptor& fd, size_t max_size = 4096) {
     buf.resize(n);
     return buf;
 }
-
-// 方便函式：直接讀寫 string
-void pipe_write(const FileDescriptor& fd, std::string_view msg) {
-    pipe_write(fd, std::as_bytes(std::span(msg.data(), msg.size())));
-}
 \`\`\`
 
-## 父子進程通訊（C++ 風格）
+## 同一功能的 C vs C++ 完整對比
 
 \`\`\`cpp
-int main() {
-    auto [read_end, write_end] = make_pipe();
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        // 子進程：寫入
-        read_end = {};  // RAII 自動 close 讀端
-        pipe_write(write_end, "Hello from child!");
-        return 0;       // write_end 離開 scope 自動 close
-    }
-
-    // 父進程：讀取
-    write_end = {};     // RAII 自動 close 寫端
-    std::string msg = pipe_read(read_end);
-    std::cout << "Parent received: " << msg << "\\n";
-    wait(nullptr);
+// ━━━ 純 C 寫法 ━━━
+int pipefd[2];
+pipe(pipefd);
+pid_t pid = fork();
+if (pid == 0) {
+    close(pipefd[0]);
+    write(pipefd[1], "Hi", 2);
+    close(pipefd[1]);  // 容易忘記！
+} else {
+    close(pipefd[1]);
+    char buf[256];
+    read(pipefd[0], buf, 256);
+    close(pipefd[0]);  // 例外時不會執行！
+    wait(NULL);
 }
+
+// ━━━ Modern C++ 寫法 ━━━
+auto [read_end, write_end] = make_pipe();
+pid_t pid = fork();
+if (pid == 0) {
+    read_end = {};  // RAII close
+    pipe_write(write_end, "Hi");
+    return 0;       // 自動 close
+}
+write_end = {};     // RAII close
+auto msg = pipe_read(read_end);
+wait(nullptr);      // read_end 離開 scope 自動 close
 \`\`\`
 
-## 命名管道 (FIFO) + C++ RAII
-
-### FIFO 的 RAII 管理
+## 命名管道 (FIFO)：C vs C++
 
 \`\`\`cpp
+// ━━━ 純 C 寫法 ━━━
+mkfifo("/tmp/myfifo", 0666);
+int fd = open("/tmp/myfifo", O_WRONLY);
+write(fd, "Hello", 5);
+close(fd);
+unlink("/tmp/myfifo");  // 常常忘記清理！
+
+// ━━━ C++ RAII 寫法 ━━━
 class ScopedFifo {
     std::string path_;
 public:
     explicit ScopedFifo(std::string_view path, mode_t mode = 0666)
-        : path_(path)
-    {
+        : path_(path) {
         if (::mkfifo(path_.c_str(), mode) == -1 && errno != EEXIST)
             throw std::system_error(errno, std::system_category());
     }
-    ~ScopedFifo() { ::unlink(path_.c_str()); }
-
+    ~ScopedFifo() { ::unlink(path_.c_str()); }  // 自動清理
     const std::string& path() const { return path_; }
-
     ScopedFifo(const ScopedFifo&) = delete;
-    ScopedFifo& operator=(const ScopedFifo&) = delete;
 };
 
-// 使用
 {
     ScopedFifo fifo("/tmp/myfifo");
     // ... 讀寫操作 ...
-}  // 離開 scope 自動 unlink
+}  // 離開 scope 自動 unlink，不會忘記！
 \`\`\`
 
 ## 管道的緩衝與阻塞行為
@@ -7952,13 +7960,28 @@ public:
 - 管道滿時寫入 → 阻塞（Linux 預設 64KB）
 - 所有寫端關閉 → \`read()\` 返回 0 (EOF)
 
-## C 風格 vs C++ 風格對比
+## C vs C++ 優缺點分析
 
-- \`close(fd)\` → \`FileDescriptor\` RAII 自動管理
-- \`char buf[256]\` → \`std::string\` / \`std::vector<std::byte>\`
-- \`perror("pipe")\` → \`throw std::system_error(errno, ...)\`
-- 手動 \`unlink()\` → \`ScopedFifo\` 析構時自動清理
-- \`memcpy\` → \`std::span\` + \`std::copy\`
+### 純 C 的優點
+
+- 零抽象成本，直接對應系統呼叫
+- 不需要 C++ runtime，適合嵌入式/核心模組
+- 所有 Unix 系統都能編譯，可攜性最高
+- 與系統文件 (man page) 的範例一致
+
+### Modern C++ 的優點
+
+- **例外安全**：RAII 保證任何路徑都會釋放資源
+- **不會忘記 close**：解構函式自動處理
+- **型別安全**：\`std::string_view\` 取代 \`void*\` + \`size_t\`
+- **表達力更強**：\`auto [r, w] = make_pipe()\` 比 \`int fds[2]\` 清晰
+- **錯誤處理一致**：exception 取代每行檢查返回值
+
+### 何時用 C、何時用 C++？
+
+- **用 C**：寫核心模組、嵌入式韌體、需要與純 C 函式庫整合
+- **用 C++**：應用層程式、需要例外安全、團隊有 C++ 經驗
+- **混合**：底層用 C API，上層用 C++ RAII 封裝（最常見的實務做法）
 `,
     codeExample: `#include <iostream>
 #include <string>
@@ -8148,53 +8171,69 @@ int main() {
 
 ## 共享記憶體概述
 
-共享記憶體是最快速的 IPC 機制 — 零拷貝，多個進程直接讀寫同一塊實體記憶體。但 C 風格的 API (\`shm_open\`, \`mmap\`, \`sem_t\`) 容易忘記釋放資源。Modern C++ 可以用 RAII 和 C++20 的 \`std::counting_semaphore\` 大幅改善。
+共享記憶體是最快速的 IPC 機制 — 零拷貝，多個進程直接讀寫同一塊實體記憶體。但需要額外的同步機制。C 和 C++ 在這裡有截然不同的寫法。
 
-## C++ RAII 封裝：SharedMemory
-
-### C 風格的 7 步流程太容易出錯
+## 純 C 寫法：POSIX shm + sem_t
 
 \`\`\`cpp
-// ❌ C 風格：7 個步驟，每個都可能遺漏
-int fd = shm_open("/name", O_CREAT | O_RDWR, 0666);
-ftruncate(fd, size);
-void* ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+// 純 C 寫法：7 個步驟的共享記憶體操作
+int fd = shm_open("/my_shm", O_CREAT | O_RDWR, 0666);
+ftruncate(fd, sizeof(SharedData));
+void* ptr = mmap(NULL, sizeof(SharedData),
+                 PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 close(fd);
-// ... 使用 ...
-munmap(ptr, size);
-shm_unlink("/name");  // 常常忘記！
+
+SharedData* data = (SharedData*)ptr;  // C 風格強制轉型
+data->counter = 0;
+
+// 用完清理（容易忘記其中一步！）
+munmap(ptr, sizeof(SharedData));
+shm_unlink("/my_shm");
 \`\`\`
 
-### C++ RAII 封裝
+### C 風格信號量
+
+\`\`\`cpp
+// POSIX 具名信號量：5 個步驟
+sem_t* sem = sem_open("/my_sem", O_CREAT, 0666, 1);
+sem_wait(sem);      // P 操作
+// 臨界區...
+sem_post(sem);      // V 操作
+sem_close(sem);
+sem_unlink("/my_sem");  // 別忘了！
+\`\`\`
+
+### C 寫法的問題
+
+1. **7 步流程**：\`shm_open\` → \`ftruncate\` → \`mmap\` → \`close\` → 使用 → \`munmap\` → \`shm_unlink\`，任何一步忘記都是 bug
+2. **void* 不安全**：需要手動強制轉型，容易出錯
+3. **sem_t 生命週期管理**：\`sem_open\`/\`sem_close\`/\`sem_unlink\` 三步驟也容易遺漏
+4. **無法用 template**：相同模式需要為每個型別重寫
+
+## Modern C++ 改進：SharedMemory RAII
 
 \`\`\`cpp
 template<typename T>
 class SharedMemory {
     T* ptr_ = nullptr;
     std::string name_;
-    bool owner_;  // 是否負責 unlink
+    bool owner_;  // owner 負責 unlink
 
 public:
-    // 建立共享記憶體（owner 負責 unlink）
     SharedMemory(std::string_view name, bool create = false)
-        : name_(name), owner_(create)
-    {
+        : name_(name), owner_(create) {
         int flags = O_RDWR | (create ? O_CREAT : 0);
         int fd = ::shm_open(name_.c_str(), flags, 0666);
         if (fd == -1)
             throw std::system_error(errno, std::system_category());
-
         if (create) ::ftruncate(fd, sizeof(T));
-
         void* p = ::mmap(nullptr, sizeof(T),
                          PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         ::close(fd);
-
         if (p == MAP_FAILED)
             throw std::system_error(errno, std::system_category());
-
-        ptr_ = static_cast<T*>(p);
-        if (create) new (ptr_) T{};  // placement new 初始化
+        ptr_ = static_cast<T*>(p);    // 型別安全轉型
+        if (create) new (ptr_) T{};   // placement new 初始化
     }
 
     ~SharedMemory() {
@@ -8208,7 +8247,6 @@ public:
     T* operator->() { return ptr_; }
     T& operator*() { return *ptr_; }
 
-    // 移動語意
     SharedMemory(SharedMemory&& o) noexcept
         : ptr_(std::exchange(o.ptr_, nullptr)),
           name_(std::move(o.name_)),
@@ -8217,7 +8255,7 @@ public:
 };
 \`\`\`
 
-### 使用方式
+### 使用對比
 
 \`\`\`cpp
 struct GameState {
@@ -8225,71 +8263,83 @@ struct GameState {
     std::atomic<bool> running{true};
 };
 
-// 進程 A（owner）
+// ━━━ 純 C 寫法：手動管理每一步 ━━━
+int fd = shm_open("/game", O_CREAT | O_RDWR, 0666);
+ftruncate(fd, sizeof(GameState));
+GameState* state = (GameState*)mmap(NULL, sizeof(GameState),
+    PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+close(fd);
+// ... 使用 ...
+munmap(state, sizeof(GameState));
+shm_unlink("/game");
+
+// ━━━ C++ RAII 寫法：一行建立，自動清理 ━━━
 {
     SharedMemory<GameState> state("/game", true);
     state->score.store(100);
 }  // 自動 munmap + shm_unlink
-
-// 進程 B（reader）
-{
-    SharedMemory<GameState> state("/game", false);
-    int s = state->score.load();
-}  // 自動 munmap（不 unlink）
 \`\`\`
 
-## C++20 Semaphore vs POSIX sem_t
-
-C++20 提供了標準的信號量，取代 POSIX \`sem_t\`：
+## 信號量：C sem_t vs C++20 semaphore
 
 \`\`\`cpp
-#include <semaphore>
-
-// ❌ C 風格 POSIX 信號量
+// ━━━ 純 C：POSIX sem_t ━━━
 sem_t* sem = sem_open("/my_sem", O_CREAT, 0666, 1);
-sem_wait(sem);
-sem_post(sem);
-sem_close(sem);
-sem_unlink("/my_sem");
+sem_wait(sem);           // 阻塞等待
+sem_post(sem);           // 釋放
+sem_close(sem);          // 關閉
+sem_unlink("/my_sem");   // 刪除（容易忘！）
 
-// ✅ C++20 信號量（單進程/多執行緒）
-std::binary_semaphore sem{1};     // 二元信號量
-std::counting_semaphore<10> cs{5}; // 計數信號量
+// ━━━ C++20：std::counting_semaphore ━━━
+std::binary_semaphore sem{1};       // 二元信號量
+std::counting_semaphore<10> cs{5};  // 計數信號量
 
 sem.acquire();    // 等同 sem_wait
 sem.release();    // 等同 sem_post
+// 不需要 close/unlink！
 
-// 帶超時的 acquire
+// C++20 還支援超時
 if (sem.try_acquire_for(std::chrono::seconds(5))) {
     // 在時限內取得
 }
 \`\`\`
 
-## std::atomic：共享記憶體的最佳搭檔
+## std::atomic 取代信號量
 
-對於簡單的共享狀態，\`std::atomic\` 可以完全取代信號量：
+對於簡單的共享計數器，\`std::atomic\` 比信號量更高效：
 
 \`\`\`cpp
-struct SharedCounter {
-    std::atomic<int> count{0};
-    std::atomic<bool> done{false};
-};
+// ━━━ C 風格：sem_t 保護普通 int ━━━
+sem_wait(&shared->sem);
+shared->counter++;        // 普通 int，需要鎖
+sem_post(&shared->sem);
 
-// 進程 A
-shared->count.fetch_add(1, std::memory_order_relaxed);
-
-// 進程 B
-int val = shared->count.load(std::memory_order_relaxed);
+// ━━━ C++ 風格：atomic 直接操作 ━━━
+shared->counter.fetch_add(1, std::memory_order_relaxed);
+// 不需要鎖！原子操作本身就是安全的
 \`\`\`
 
-## 生產者-消費者（C++ 風格）
+## 生產者-消費者：C vs C++
 
 \`\`\`cpp
+// ━━━ 純 C：sem_t + 手動管理 ━━━
+struct SharedBuffer {
+    sem_t mutex, full, empty;
+    int buffer[10];
+    int in, out;
+};
+sem_wait(&buf->empty);
+sem_wait(&buf->mutex);
+buf->buffer[buf->in] = item;
+buf->in = (buf->in + 1) % 10;
+sem_post(&buf->mutex);
+sem_post(&buf->full);
+
+// ━━━ C++：Lock-free Ring Buffer ━━━
 template<typename T, size_t N>
 struct SharedRingBuffer {
     std::array<T, N> buffer{};
-    std::atomic<size_t> head{0};  // 寫入位置
-    std::atomic<size_t> tail{0};  // 讀取位置
+    std::atomic<size_t> head{0}, tail{0};
 
     bool try_push(const T& val) {
         size_t h = head.load(std::memory_order_relaxed);
@@ -8310,26 +8360,31 @@ struct SharedRingBuffer {
         return true;
     }
 };
-
-// 搭配 SharedMemory 使用
-SharedMemory<SharedRingBuffer<int, 64>> buf("/ring", true);
-buf->try_push(42);
 \`\`\`
 
-## C 風格 vs C++ 風格對比
+## C vs C++ 優缺點分析
 
-- \`shm_open + mmap + munmap + shm_unlink\` → \`SharedMemory<T>\` RAII
-- \`sem_t + sem_wait + sem_post\` → \`std::counting_semaphore\` / \`std::atomic\`
-- \`char message[256]\` → \`std::array<char, 256>\`
-- \`memcpy(ptr, data, size)\` → \`std::copy\` / \`std::span\`
-- 手動錯誤檢查 → \`throw std::system_error\`
+### 純 C 的優點
 
-## 注意事項
+- 直接對應 POSIX API，與 man page 一致
+- 不需要 C++ 編譯器，適合核心/驅動程式
+- \`sem_t\` 支援跨進程（放在共享記憶體中）
+- 所有 Unix/Linux 系統支援
 
-1. 共享記憶體中的物件**不能包含指標**（不同進程的虛擬位址不同）
-2. 使用 \`std::atomic\` 或信號量做同步
-3. 結構體要注意 \`alignas\` 對齊
-4. 編譯旗標：\`-lrt -lpthread\`
+### Modern C++ 的優點
+
+- **RAII**：\`SharedMemory<T>\` 封裝 7 步為 1 步，不會洩漏
+- **型別安全**：template 避免 \`void*\` 強制轉型
+- **更高效**：\`std::atomic\` 可取代 \`sem_t\` 做簡單同步
+- **Lock-free**：Ring buffer 等無鎖結構比信號量效能更好
+- **C++20 semaphore**：標準化的信號量，跨平台一致
+
+### 何時用 C、何時用 C++？
+
+- **用 C**：與 C 函式庫整合、核心模組、嵌入式系統
+- **用 C++**：應用層、需要型別安全和 RAII、追求高效能無鎖設計
+- **注意**：共享記憶體中的物件不能包含指標（虛擬位址不同）
+- **編譯旗標**：\`-lrt -lpthread\`
 `,
     codeExample: `#include <iostream>
 #include <atomic>
@@ -8528,178 +8583,237 @@ int main() {
 
 ## Socket 概述
 
-Socket 是最通用的 IPC 機制，支援本機和跨網路通訊。C 風格的 Socket API 充斥著裸 \`int fd\`、\`struct sockaddr*\` 強制轉型、手動 \`close()\`。Modern C++ 可以用 RAII、\`std::string\`、例外處理大幅改善。
+Socket 是最通用的 IPC 機制，支援本機和跨網路通訊。底層 API 是純 C 設計（BSD Socket），充斥著裸 \`int fd\`、\`struct sockaddr*\` 強制轉型。以下先看 C 寫法，再看 C++ 如何改進。
 
-## C++ RAII Socket 封裝
+## 純 C 寫法：TCP Server
+
+\`\`\`cpp
+// 純 C 風格 TCP Server：大量手動管理
+int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+int opt = 1;
+setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+struct sockaddr_in addr;
+addr.sin_family = AF_INET;
+addr.sin_addr.s_addr = INADDR_ANY;
+addr.sin_port = htons(8080);
+bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));  // C 強制轉型
+listen(server_fd, 5);
+
+int client_fd = accept(server_fd, NULL, NULL);
+char buf[1024];
+ssize_t n = recv(client_fd, buf, sizeof(buf), 0);
+if (n == -1) { perror("recv"); }  // 每行都要檢查錯誤
+send(client_fd, buf, n, 0);
+
+close(client_fd);   // 別忘了！
+close(server_fd);   // 這個也別忘了！
+\`\`\`
+
+### C 寫法的問題
+
+1. **兩個 fd 要手動 close**：錯誤路徑容易遺漏
+2. **\`(struct sockaddr*)\` 強制轉型**：不安全且醜陋
+3. **\`char buf[1024]\`**：固定大小，容易溢位
+4. **\`perror\` + 返回碼**：錯誤處理散落各處
+
+## Modern C++ 改進：RAII Socket
 
 \`\`\`cpp
 class Socket {
     int fd_ = -1;
 public:
-    explicit Socket(int domain, int type, int protocol = 0)
-        : fd_(::socket(domain, type, protocol)) {
+    explicit Socket(int domain, int type, int proto = 0)
+        : fd_(::socket(domain, type, proto)) {
         if (fd_ == -1)
-            throw std::system_error(errno, std::system_category(), "socket");
+            throw std::system_error(errno, std::system_category());
     }
     explicit Socket(int fd) : fd_(fd) {}
     ~Socket() { if (fd_ >= 0) ::close(fd_); }
 
-    // 移動語意
+    // 移動語意（像 unique_ptr）
     Socket(Socket&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
     Socket& operator=(Socket&& o) noexcept {
-        if (this != &o) { if (fd_ >= 0) ::close(fd_); fd_ = std::exchange(o.fd_, -1); }
+        if (this != &o) {
+            if (fd_ >= 0) ::close(fd_);
+            fd_ = std::exchange(o.fd_, -1);
+        }
         return *this;
     }
     Socket(const Socket&) = delete;
-    Socket& operator=(const Socket&) = delete;
 
     int get() const { return fd_; }
 
-    // 發送 string_view（取代 char* + strlen）
+    // string_view 取代 char* + strlen
     void send(std::string_view data) const {
         ::send(fd_, data.data(), data.size(), 0);
     }
 
-    // 接收為 string（取代 char buf[1024]）
-    std::string recv(size_t max_size = 4096) const {
-        std::string buf(max_size, '\\0');
+    // 回傳 string 取代 char buf[]
+    std::string recv(size_t max = 4096) const {
+        std::string buf(max, '\\0');
         ssize_t n = ::recv(fd_, buf.data(), buf.size(), 0);
-        if (n <= 0) return {};
-        buf.resize(n);
+        buf.resize(n > 0 ? n : 0);
         return buf;
     }
 };
 \`\`\`
 
-## TCP Server 封裝
+### TcpServer 封裝
 
 \`\`\`cpp
 class TcpServer {
     Socket sock_;
 public:
     TcpServer(uint16_t port, int backlog = 5)
-        : sock_(AF_INET, SOCK_STREAM)
-    {
+        : sock_(AF_INET, SOCK_STREAM) {
         int opt = 1;
         setsockopt(sock_.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
         addr.sin_port = htons(port);
-
         if (::bind(sock_.get(), reinterpret_cast<sockaddr*>(&addr),
                    sizeof(addr)) == -1)
             throw std::system_error(errno, std::system_category(), "bind");
         if (::listen(sock_.get(), backlog) == -1)
             throw std::system_error(errno, std::system_category(), "listen");
     }
-
-    // 接受連線，回傳 RAII Socket
     Socket accept() {
         int fd = ::accept(sock_.get(), nullptr, nullptr);
         if (fd == -1)
-            throw std::system_error(errno, std::system_category(), "accept");
-        return Socket(fd);
+            throw std::system_error(errno, std::system_category());
+        return Socket(fd);  // 回傳 RAII 物件
     }
 };
 \`\`\`
 
-## C 風格 vs C++ 風格對比
+## TCP Server 完整對比
 
 \`\`\`cpp
-// ❌ C 風格：裸 fd、手動 close、char buf[]、perror
-int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+// ━━━ 純 C 寫法 ━━━
+int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+// ... 10 行設定 ...
+int client_fd = accept(server_fd, NULL, NULL);
 char buf[1024];
-ssize_t n = recv(sockfd, buf, sizeof(buf), 0);
-if (n == -1) { perror("recv"); close(sockfd); return -1; }
-close(sockfd);
+ssize_t n = recv(client_fd, buf, sizeof(buf), 0);
+send(client_fd, buf, n, 0);
+close(client_fd);
+close(server_fd);  // 忘記 = 資源洩漏
 
-// ✅ C++ 風格：RAII + string + exception
-Socket sock(AF_INET, SOCK_STREAM);
-std::string data = sock.recv();  // 自動管理緩衝區
-// sock 離開 scope 自動 close
+// ━━━ C++ RAII 寫法 ━━━
+TcpServer server(8080);
+auto client = server.accept();      // 回傳 RAII Socket
+auto msg = client.recv();           // 回傳 std::string
+client.send("Echo: " + msg);
+// client, server 離開 scope 自動 close
 \`\`\`
 
-## TCP 客戶端（C++ 風格）
+## TCP Client：C vs C++
 
 \`\`\`cpp
+// ━━━ 純 C 寫法 ━━━
+int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+struct sockaddr_in addr;
+addr.sin_family = AF_INET;
+addr.sin_port = htons(8080);
+inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+send(sockfd, "Hello", 5, 0);
+char buf[1024];
+recv(sockfd, buf, sizeof(buf), 0);
+close(sockfd);
+
+// ━━━ C++ 工廠函式 ━━━
 Socket connect_to(std::string_view host, uint16_t port) {
     Socket sock(AF_INET, SOCK_STREAM);
-
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     inet_pton(AF_INET, host.data(), &addr.sin_addr);
-
     if (::connect(sock.get(), reinterpret_cast<sockaddr*>(&addr),
                   sizeof(addr)) == -1)
-        throw std::system_error(errno, std::system_category(), "connect");
+        throw std::system_error(errno, std::system_category());
     return sock;  // 移動語意回傳
 }
 
-// 使用
 auto client = connect_to("127.0.0.1", 8080);
 client.send("Hello, Server!");
 auto reply = client.recv();
-// client 離開 scope 自動 close
+// 自動 close
 \`\`\`
 
-## 型別安全的訊息協議
+## 訊息協議：C vs C++
 
 \`\`\`cpp
-// C++ 結構化協議（取代 char buf + 手動解析）
-struct MessageHeader {
-    uint32_t length;
-    uint16_t type;
-};
+// ━━━ C 寫法：void* + 手動序列化 ━━━
+struct MessageHeader { uint32_t length; uint16_t type; };
+void send_message(int fd, uint16_t type, const void* data, uint32_t len) {
+    MessageHeader hdr = {htonl(len), htons(type)};
+    send(fd, &hdr, sizeof(hdr), 0);
+    send(fd, data, len, 0);  // void* 沒有型別檢查
+}
 
-// 泛型發送：任何可序列化的 trivially_copyable 型別
+// ━━━ C++ 寫法：template + concepts ━━━
 template<typename T>
     requires std::is_trivially_copyable_v<T>
 void send_message(const Socket& sock, uint16_t type, const T& data) {
     MessageHeader hdr{htonl(sizeof(T)), htons(type)};
     ::send(sock.get(), &hdr, sizeof(hdr), 0);
     ::send(sock.get(), &data, sizeof(data), 0);
-}
-
-// string_view 版本
-void send_message(const Socket& sock, uint16_t type,
-                  std::string_view data) {
-    MessageHeader hdr{htonl(static_cast<uint32_t>(data.size())),
-                      htons(type)};
-    ::send(sock.get(), &hdr, sizeof(hdr), 0);
-    ::send(sock.get(), data.data(), data.size(), 0);
+    // 編譯期檢查：只接受可安全複製的型別
 }
 \`\`\`
 
-## 多執行緒伺服器（C++ 風格）
+## 多執行緒伺服器：pthread vs jthread
 
 \`\`\`cpp
-void echo_server(uint16_t port) {
-    TcpServer server(port);
-
-    std::vector<std::jthread> workers;
-    while (true) {
-        auto client = server.accept();
-        // 每個連線一個 jthread（自動 join）
-        workers.emplace_back([c = std::move(client)]() {
-            while (auto msg = c.recv(); !msg.empty()) {
-                c.send("Echo: " + msg);
-            }
-        });
-    }
+// ━━━ C 寫法：pthread ━━━
+void* handle_client(void* arg) {
+    int client_fd = *(int*)arg;
+    // ... 處理 ...
+    close(client_fd);
+    free(arg);
+    return NULL;
 }
+int* fd_copy = malloc(sizeof(int));
+*fd_copy = client_fd;
+pthread_t tid;
+pthread_create(&tid, NULL, handle_client, fd_copy);
+pthread_detach(tid);
+
+// ━━━ C++ 寫法：jthread + lambda ━━━
+std::vector<std::jthread> workers;
+auto client = server.accept();
+workers.emplace_back([c = std::move(client)]() {
+    while (auto msg = c.recv(); !msg.empty()) {
+        c.send("Echo: " + msg);
+    }
+});  // jthread 自動 join，Socket 自動 close
 \`\`\`
 
-## 改善方向總結
+## C vs C++ 優缺點分析
 
-- \`int sockfd\` → \`Socket\` RAII class
-- \`char buf[1024]\` → \`std::string\` / \`std::string_view\`
-- \`perror + return -1\` → \`throw std::system_error\`
-- \`(struct sockaddr*)\` 強制轉型 → \`reinterpret_cast\` 明確意圖
-- 手動 \`close()\` → 解構函式自動管理
-- \`pthread_create\` → \`std::jthread\`（C++20 自動 join）
+### 純 C 的優點
+
+- 直接對應 BSD Socket API，所有平台一致
+- 不需要 C++ runtime，適合嵌入式 / 低資源環境
+- 與網路程式設計教科書和 man page 一致
+- 可以精確控制每一步的行為
+
+### Modern C++ 的優點
+
+- **不會忘記 close**：RAII Socket 自動管理生命週期
+- **型別安全**：\`string_view\` 取代 \`void*\`，template 取代強制轉型
+- **例外處理**：集中處理錯誤，不用每行檢查返回值
+- **表達力**：\`auto msg = client.recv()\` vs \`char buf[1024]; recv(...)\`
+- **多執行緒**：\`std::jthread\` + lambda 比 \`pthread_create\` + \`malloc\` 安全
+
+### 何時用 C、何時用 C++？
+
+- **用 C**：高效能網路程式（如 Nginx）、嵌入式、與 C lib 整合
+- **用 C++**：應用伺服器、gRPC/HTTP client、需要例外安全
+- **混合**：底層 syscall 用 C API，外層用 C++ RAII 封裝（業界主流做法）
 `,
     codeExample: `#include <iostream>
 #include <string>
