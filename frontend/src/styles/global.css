@@ -659,10 +659,14 @@ button {
   color: var(--text-secondary);
 }
 
+.markdown-content .table-wrapper {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
 .markdown-content table {
   width: 100%;
   border-collapse: collapse;
-  margin: 1rem 0;
 }
 
 .markdown-content th,

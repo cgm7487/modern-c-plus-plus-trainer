@@ -102,6 +102,44 @@ function parseMarkdown(text) {
       continue;
     }
 
+    // Table
+    if (line.trim().startsWith('|') && i + 1 < lines.length && /^\|[\s-:|]+\|$/.test(lines[i + 1].trim())) {
+      const tableRows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        tableRows.push(lines[i].trim());
+        i++;
+      }
+      if (tableRows.length >= 2) {
+        const parseRow = (row) =>
+          row.split('|').slice(1, -1).map(cell => cell.trim());
+        const headers = parseRow(tableRows[0]);
+        const bodyRows = tableRows.slice(2).map(parseRow);
+        elements.push(
+          <div key={key++} className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  {headers.map((h, ci) => (
+                    <th key={ci}>{inlineFormat(h)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {bodyRows.map((row, ri) => (
+                  <tr key={ri}>
+                    {row.map((cell, ci) => (
+                      <td key={ci}>{inlineFormat(cell)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      }
+      continue;
+    }
+
     // Empty line
     if (line.trim() === '') {
       i++;
@@ -110,7 +148,7 @@ function parseMarkdown(text) {
 
     // Paragraph
     const paraLines = [];
-    while (i < lines.length && lines[i].trim() !== '' && !lines[i].startsWith('#') && !lines[i].trim().startsWith('```') && !/^[-*]\s/.test(lines[i].trim()) && !/^\d+\.\s/.test(lines[i].trim())) {
+    while (i < lines.length && lines[i].trim() !== '' && !lines[i].startsWith('#') && !lines[i].trim().startsWith('```') && !/^[-*]\s/.test(lines[i].trim()) && !/^\d+\.\s/.test(lines[i].trim()) && !lines[i].trim().startsWith('|')) {
       paraLines.push(lines[i]);
       i++;
     }
