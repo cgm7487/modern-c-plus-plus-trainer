@@ -7840,7 +7840,8 @@ if (pid == 0) {
 class FileDescriptor {
     int fd_ = -1;
 public:
-    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    FileDescriptor() = default;
+    explicit FileDescriptor(int fd) : fd_(fd) {}
     ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
 
     // 移動語意，不可複製（像 unique_ptr）
@@ -7985,8 +7986,8 @@ public:
 `,
     codeExample: `#include <iostream>
 #include <string>
+#include <cstdint>
 #include <utility>
-#include <span>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <system_error>
@@ -7995,7 +7996,8 @@ public:
 class FileDescriptor {
     int fd_ = -1;
 public:
-    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    FileDescriptor() = default;
+    explicit FileDescriptor(int fd) : fd_(fd) {}
     ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
     FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
     FileDescriptor& operator=(FileDescriptor&& o) noexcept {
@@ -8043,7 +8045,9 @@ int main() {
     }
 
     write_end = {};  // RAII close 寫端
-    while (auto msg = pipe_read_msg(read_end); !msg.empty()) {
+    for (;;) {
+        auto msg = pipe_read_msg(read_end);
+        if (msg.empty()) break;
         std::cout << "Parent received: " << msg << "\\n";
     }
     wait(nullptr);
@@ -8060,7 +8064,8 @@ int main() {
 class FileDescriptor {
     int fd_ = -1;
 public:
-    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    FileDescriptor() = default;
+    explicit FileDescriptor(int fd) : fd_(fd) {}
     ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
     FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
     FileDescriptor& operator=(FileDescriptor&& o) noexcept {
@@ -8106,7 +8111,8 @@ int main() {
 class FileDescriptor {
     int fd_ = -1;
 public:
-    explicit FileDescriptor(int fd = -1) : fd_(fd) {}
+    FileDescriptor() = default;
+    explicit FileDescriptor(int fd) : fd_(fd) {}
     ~FileDescriptor() { if (fd_ >= 0) ::close(fd_); }
     FileDescriptor(FileDescriptor&& o) noexcept : fd_(std::exchange(o.fd_, -1)) {}
     FileDescriptor& operator=(FileDescriptor&& o) noexcept {
@@ -8786,7 +8792,7 @@ pthread_detach(tid);
 std::vector<std::jthread> workers;
 auto client = server.accept();
 workers.emplace_back([c = std::move(client)]() {
-    while (auto msg = c.recv(); !msg.empty()) {
+    for (auto msg = c.recv(); !msg.empty(); msg = c.recv()) {
         c.send("Echo: " + msg);
     }
 });  // jthread 自動 join，Socket 自動 close
